@@ -1,0 +1,53 @@
+use bevy::prelude::*;
+use hookrunner_shared::{
+    PlayerId, PlayerInput, PlayerState, TICK_DURATION, level, movement,
+    weapon::{self, Impact, Projectile},
+};
+use lightyear::prelude::{input::native::ActionState, *};
+
+/// Publish only bolts that survived this frame’s collision steps. An immediate
+/// wall hit must not enqueue a network despawn for a never-published entity.
+pub fn publish_projectiles(
+    mut commands: Commands,
+    bolts: Query<Entity, (With<Projectile>, Without<Replicate>)>,
+) {
+    for entity in &bolts {
+        commands.entity(entity).insert((
+            Replicate::to_clients(NetworkTarget::All),
+            InterpolationTarget::to_clients(NetworkTarget::All),
+        ));
+    }
+}
+
+pub fn advance_projectiles(
+    mut commands: Commands,
+    mut projectiles: Query<(Entity, &mut Projectile)>,
+    mut players: Query<(&PlayerId, &mut PlayerState, &ActionState<PlayerInput>)>,
+) {
+    for (entity, mut bolt) in &mut projectiles {
+        let delta = bolt.direction * weapon::PROJECTILE_SPEED * TICK_DURATION.as_secs_f32();
+        let hit = weapon::trace(
+            level::world(),
+            &bolt,
+            delta,
+            players.iter().map(|(id, state, _)| (id.0, state)),
+        );
+        if let Some((_, impact)) = hit {
+            if let Impact::Player(victim) = impact {
+                for (id, mut state, input) in &mut players {
+                    if id.0 == victim {
+                        movement::kill(&mut state, input.0.pitch_radians());
+                        break;
+                    }
+                }
+            }
+            commands.entity(entity).despawn();
+            continue;
+        }
+        bolt.position += delta;
+        bolt.remaining_ticks -= 1;
+        if bolt.remaining_ticks == 0 {
+            commands.entity(entity).despawn();
+        }
+    }
+}

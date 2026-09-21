@@ -1,0 +1,14 @@
+[package]
+name = "hookrunner-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+bevy = { workspace = true, features = ["bevy_log", "multi_threaded"] }
+lightyear = { workspace = true, features = ["server"] }
+hookrunner-shared.workspace = true
+rand = "0.9"
+aeronet_websocket = { version = "=0.19.1", default-features = false, features = ["server"] }
+url = "2"

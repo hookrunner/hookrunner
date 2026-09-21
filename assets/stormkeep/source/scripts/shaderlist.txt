@@ -1,0 +1,10 @@
+// Hookrunner: imported shader libraries used by the editable map.
+common
+effects_warpzone
+exx
+liquids_lava
+map_stormkeep
+model_xonotic_jumppad01
+skies_extragalactic
+trak4x
+trak5x

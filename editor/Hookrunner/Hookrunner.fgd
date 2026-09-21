@@ -1,0 +1,44 @@
+@BaseClass = Target [
+    targetname(string) : "Name"
+    target(string) : "Target entity"
+]
+@SolidClass = worldspawn : "Stormkeep world geometry" [
+    message(string) : "Map title" : "Stormkeep"
+    author(string) : "Authors"
+]
+@PointClass size(-16 -16 -24, 16 16 48) color(0.2 0.9 0.3) = info_player_deathmatch : "Player spawn; origin is 24 units above feet" [
+    angle(angle) : "Facing angle" : 0
+]
+@PointClass size(-8 -8 -8, 8 8 8) color(1 1 0.5) = light : "Point light" [
+    light(integer) : "Intensity / range" : 300
+    _color(string) : "RGB color (0..1)" : "1 1 1"
+]
+@PointClass base(Target) size(-8 -8 -8, 8 8 8) color(1 0.5 0) = target_position : "Jump pad apex target" []
+@PointClass base(Target) size(-8 -8 -8, 8 8 8) = info_null : "Map target" []
+@PointClass base(Target) size(-16 -16 -24, 16 16 48) color(0.4 0.7 1) = misc_teleporter_dest : "Teleport exit" [
+    angle(angle) : "Exit facing" : 0
+]
+@SolidClass = func_group : "World geometry group" []
+@SolidClass = func_wall : "Static geometry (deathmatch filters respected)" [
+    gametypefilter(string) : "Mode filter" : "-rc"
+]
+@SolidClass base(Target) color(0.5 0.5 1) = trigger_push : "Jump pad; target determines ballistic apex" []
+@SolidClass base(Target) color(0.5 0.5 1) = trigger_teleport : "Teleport to misc_teleporter_dest" []
+@SolidClass base(Target) color(0.2 0.7 1) = trigger_warpzone : "Paired portal; one wavy material face defines its opening" []
+@SolidClass color(1 0.2 0.1) = trigger_hurt : "Instant hazard respawn" []
+@SolidClass = func_bobbing : "Imported decorative brush, static in Hookrunner" [
+    height(float) : "Original bob height (not simulated)" : 4
+]
+@PointClass base(Target) size(-16 -16 -16, 16 16 16) model({ "path": model, "scale": modelscale }) = misc_model : "Static MD3 decoration" [
+    model(string) : "MD3 path"
+    angle(angle) : "Yaw" : 0
+    angles(string) : "Pitch yaw roll"
+    modelscale(float) : "Scale" : 1
+    modelscale_vec(string) : "XYZ scale"
+]
+@PointClass base(Target) size(-16 -16 -16, 16 16 16) model({ "path": model, "scale": modelscale }) = misc_gamemodel : "Static MD3 prop (crates collide)" [
+    model(string) : "MD3 path"
+    angle(angle) : "Yaw" : 0
+    modelscale(float) : "Scale" : 1
+    modelscale_vec(string) : "XYZ scale"
+]

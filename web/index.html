@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hookrunner</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #111; color: #c8c8c8; font: 16px system-ui, sans-serif; }
+    #arena { position: relative; width: 100%; height: 100%; }
+    canvas { display: block; width: 100%; height: 100%; outline: none; }
+    #loading { position: absolute; inset: 0; display: grid; place-content: center; padding: 2rem; background: #111; text-align: center; z-index: 2; }
+    #status { margin: 0; font: 20px/1.5 ui-monospace, monospace; }
+    .dot-two { animation: dot-two .375s steps(1, end) infinite; }
+    .dot-three { animation: dot-three .375s steps(1, end) infinite; }
+    @keyframes dot-two { 0% { opacity: 0; } 33.333%, 100% { opacity: 1; } }
+    @keyframes dot-three { 0% { opacity: 0; } 66.667%, 100% { opacity: 1; } }
+    @media (prefers-reduced-motion: reduce) { .dot-two, .dot-three { animation: none; } }
+    #error { margin: .75rem 0 0; max-width: 36rem; font-size: 14px; line-height: 1.5; white-space: pre-wrap; }
+    #error:empty { display: none; }
+  </style>
+</head>
+<body>
+  <main id="arena" data-build="__HOOKRUNNER_BUILD__" data-asset-root="__HOOKRUNNER_ASSET_ROOT__">
+    <canvas id="game" tabindex="0" aria-label="Hookrunner multiplayer arena"></canvas>
+    <div id="loading">
+      <p id="status" role="status" aria-label="loading">loading<span aria-hidden="true">.<span class="dot-two">.</span><span class="dot-three">.</span></span></p>
+      <p id="error"></p>
+    </div>
+  </main>
+  <script type="module">
+    __HOOKRUNNER_BUILD_SYNC__
+    const canvas = document.querySelector('#game');
+    canvas.addEventListener('contextmenu', event => event.preventDefault());
+    canvas.addEventListener('click', () => {
+      canvas.focus();
+      if (document.pointerLockElement !== canvas) {
+        const pending = canvas.requestPointerLock();
+        pending?.catch(error => console.warn('Mouse capture declined:', error));
+      }
+    });
+    const fail = error => {
+      document.querySelector('#loading').style.display = 'grid';
+      document.querySelector('#status').textContent = 'The game could not start.';
+      document.querySelector('#error').textContent = String(error) + '\nCheck the browser console and confirm WebGL 2 is available.';
+    };
+    window.addEventListener('error', event => fail(event.error ?? event.message));
+    window.addEventListener('unhandledrejection', event => fail(event.reason));
+    const loadingText = document.querySelector('#status').innerHTML;
+    const loading = () => {
+      document.exitPointerLock();
+      document.querySelector('#loading').style.display = 'grid';
+      document.querySelector('#status').innerHTML = loadingText;
+      document.querySelector('#error').textContent = '';
+    };
+    watchBuild({
+      build: '__HOOKRUNNER_BUILD__',
+      onCurrent: async () => {
+        loading();
+        const { default: init } = await import('__HOOKRUNNER_WEB_MODULE__');
+        await init();
+      },
+      onReload: loading,
+      onError: fail,
+    });
+  </script>
+</body>
+</html>

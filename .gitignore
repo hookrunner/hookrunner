@@ -1,0 +1,11 @@
+/target/
+/dist/
+/.tools/
+*.log
+__pycache__/
+*.py[cod]
+*.blend[0-9]*
+/assets/stormkeep/built/q3map2/
+/local/
+/.agents/
+/.codex/
