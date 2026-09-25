@@ -57,3 +57,25 @@ fn set_attribute(id: &str, name: &str, value: &str) {
         element.set_attribute(name, value).unwrap();
     }
 }
+
+// Mirror the shared state while the browser bootstrap overlay covers the canvas.
+// Asset readiness and percentage calculation remain in Rust on both platforms.
+pub fn loading_progress(percent: u8, error: Option<&str>) {
+    let Some(document) = web_sys::window().and_then(|w| w.document()) else {
+        return;
+    };
+    if let Some(status) = document.get_element_by_id("status") {
+        let text = if error.is_some() {
+            format!("Loading failed at {percent}%")
+        } else {
+            format!("Loading {percent}%")
+        };
+        status.set_text_content(Some(&text));
+    }
+    if let Some(message) = document.get_element_by_id("error") {
+        message.set_text_content(error);
+    }
+    if let Some(bar) = document.get_element_by_id("progress") {
+        let _ = bar.set_attribute("value", &percent.to_string());
+    }
+}

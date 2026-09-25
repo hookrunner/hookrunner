@@ -11,3 +11,7 @@
 - Add concise Russian progress comments at meaningful milestones: completed work, current work, blockers, next steps, and verification results. State whether changes are local, committed, or published. Avoid duplicate tasks and repetitive comments for routine commands.
 - Maintain useful Scrum notes and review agendas when relevant. Clearly label proposed meetings and pending actions; record meeting outcomes, participants, dates, and time spent only when supported by actual information. Do not invent meetings or worklogs.
 - Include relevant Jira issue links when reporting results. If Jira is unavailable, continue authorized implementation and keep pending updates in the ignored `local/` directory for later synchronization.
+
+## Pull requests
+
+- Make changes on a new feature branch based on current main and submit a pull request. Push only the feature branch needed for that PR; never push directly to main or merge without user authorization. Preserve existing local work and include verification and relevant Jira links in the PR.
