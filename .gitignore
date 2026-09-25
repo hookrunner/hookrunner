@@ -9,3 +9,5 @@ __pycache__/
 /local/
 /.agents/
 /.codex/
+
+/assets/stormkeep/built/mipmaps/

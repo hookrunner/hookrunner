@@ -36,20 +36,36 @@ for path in files:
         digest.update(hashlib.file_digest(source, 'sha256').digest())
 asset_directories = {
     'stormkeep/built/textures': pathlib.Path('assets/stormkeep/built/textures'),
+    'stormkeep/built/mipmaps': pathlib.Path('assets/stormkeep/built/mipmaps'),
     'shaders': pathlib.Path('assets/shaders'),
     'weapons/starter_pistol/built': pathlib.Path('assets/weapons/starter_pistol/built'),
 }
+metadata = json.loads(pathlib.Path('assets/stormkeep/built/map.json').read_text())
+# Opaque textures are replaced by their baked atlases; do not ship two copies.
+originals = {metadata['sky'], *metadata['lightmaps']}
+for material in metadata['materials']:
+    if material['alpha'] or material['blend']:
+        originals.add(material['texture'])
+        if material.get('glow'):
+            originals.add(material['glow'])
+asset_files = []
 for name, directory in asset_directories.items():
     for path in sorted(directory.iterdir()):
-        digest.update(f'{name}/{path.name}'.encode())
+        if name == 'stormkeep/built/textures' and path.name not in originals:
+            continue
+        relative = f'{name}/{path.name}'
+        asset_files.append((relative, path))
+        digest.update(relative.encode())
         digest.update(hashlib.sha256(path.read_bytes()).digest())
 version = digest.hexdigest()[:16]
 destination = pathlib.Path('dist/pkg') / version
 destination.mkdir(parents=True, exist_ok=True)
 for path in files:
     shutil.copy2(path, destination / path.name)
-for name, directory in asset_directories.items():
-    shutil.copytree(directory, destination / 'assets' / name, dirs_exist_ok=True)
+for relative, path in asset_files:
+    target = destination / 'assets' / relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(path, target)
 
 # Ship editable corresponding map sources, importer, and attribution with the build.
 import zipfile
@@ -58,7 +74,7 @@ with zipfile.ZipFile(destination / 'stormkeep-source.zip', 'w', zipfile.ZIP_DEFL
         if path.is_file() and 'built' not in path.parts:
             archive.write(path, path)
     for path in map(pathlib.Path, ['scripts/import-stormkeep.py', 'scripts/map_bake.py',
-                                  'scripts/map_bsp.py', 'scripts/setup-map-tools.sh',
+                                  'scripts/map_bsp.py', 'scripts/mip_filter.rs', 'crates/game/build.rs', 'scripts/setup-map-tools.sh',
                                   'scripts/requirements-maps.txt']):
         archive.write(path, path)
     for path in sorted(pathlib.Path('editor/Hookrunner').iterdir()):
