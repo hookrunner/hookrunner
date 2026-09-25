@@ -31,6 +31,7 @@ pub struct PlayerState {
     pub jump: JumpState,
     pub weapon: crate::weapon::WeaponState,
     pub grounded: bool,
+    pub match_paused: bool,
     pub death: Option<DeathState>,
     /// Map-authored spawn heading and portal rotations relative to raw mouse aim.
     pub view_yaw_offset: f32,
@@ -105,6 +106,11 @@ impl Ease for PlayerState {
                 dash: if t >= 1.0 { end.dash } else { start.dash },
                 jump: if t >= 1.0 { end.jump } else { start.jump },
                 death: if t >= 1.0 { end.death } else { start.death },
+                match_paused: if t >= 1.0 {
+                    end.match_paused
+                } else {
+                    start.match_paused
+                },
                 grounded: if t >= 1.0 {
                     end.grounded
                 } else {
@@ -193,6 +199,7 @@ impl Plugin for ProtocolPlugin {
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<JoinRejected>()
             .add_direction(NetworkDirection::ServerToClient);
+        app.register_component::<crate::match_state::MatchState>();
         app.register_component::<PlayerName>();
         app.register_component::<PlayerId>();
         app.register_component::<crate::weapon::Projectile>()
