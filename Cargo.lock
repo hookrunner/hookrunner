@@ -3455,6 +3455,8 @@ dependencies = [
  "hookrunner-client",
  "hookrunner-shared",
  "lightyear",
+ "png",
+ "serde_json",
  "web-sys",
 ]
 

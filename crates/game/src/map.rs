@@ -12,7 +12,7 @@ use hookrunner_shared::level::{self, BinaryReader};
 #[derive(Resource)]
 pub struct MapTextures {
     images: Vec<Handle<Image>>,
-    mipmapped: Vec<Handle<Image>>,
+    mipmapped: Vec<(Handle<Image>, u32, u32, u32)>,
     sky: Handle<Image>,
 }
 
@@ -27,8 +27,19 @@ pub fn build_map(
     let mut textures = Vec::new();
     let mut mipmapped = Vec::new();
     let mut texture = |name: &str, repeat: bool, mipmaps: bool| {
+        let baked = mipmaps.then(|| {
+            crate::mipmaps::BAKED_MIPS
+                .iter()
+                .find(|entry| entry.0 == name)
+                .expect("texture mipmaps baked at build time")
+        });
+        let directory = if baked.is_some() {
+            "mipmaps"
+        } else {
+            "textures"
+        };
         let handle = assets.load_with_settings(
-            format!("stormkeep/built/textures/{name}"),
+            format!("stormkeep/built/{directory}/{name}"),
             move |settings: &mut ImageLoaderSettings| {
                 let mode = if repeat {
                     ImageAddressMode::Repeat
@@ -44,8 +55,8 @@ pub fn build_map(
             },
         );
         textures.push(handle.clone());
-        if mipmaps {
-            mipmapped.push(handle.clone());
+        if let Some((_, width, height, levels)) = baked {
+            mipmapped.push((handle.clone(), *width, *height, *levels));
         }
         handle
     };
@@ -170,19 +181,22 @@ pub fn finish_loading(
         .iter()
         .all(|handle| assets.is_loaded_with_dependencies(handle.id()))
     {
-        for handle in &textures.mipmapped {
-            let image = images.get_mut(handle).expect("loaded map image");
+        // The build script already filtered every level. Copy the decoded atlas
+        // rows into the GPU's packed mip layout and restore base-level dimensions.
+        for (handle, width, height, levels) in &textures.mipmapped {
+            let image = images.get_mut(handle).expect("loaded baked mip atlas");
             assert_eq!(
                 image.texture_descriptor.format,
                 TextureFormat::Rgba8UnormSrgb
             );
-            let width = image.width() as usize;
-            let height = image.height() as usize;
-            image.texture_descriptor.mip_level_count = crate::mipmaps::append_srgb_mips(
-                image.data.as_mut().expect("decoded map pixels"),
-                width,
-                height,
-            );
+            image.data = Some(crate::mipmaps::unpack(
+                image.data.as_ref().expect("decoded baked mip pixels"),
+                *width,
+                *height,
+                *levels,
+            ));
+            image.texture_descriptor.size.height = *height;
+            image.texture_descriptor.mip_level_count = *levels;
         }
         let sky = &textures.sky;
         let image = images.get_mut(sky).expect("loaded sky image");
