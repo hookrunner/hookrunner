@@ -5,6 +5,21 @@ use serde::{Deserialize, Serialize};
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct PlayerId(pub u64);
 
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct PlayerName(pub String);
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct JoinRequest {
+    pub nickname: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct JoinRejected {
+    pub reason: String,
+}
+
+pub struct LobbyChannel;
+
 /// Feet position, planar/vertical velocity and body yaw. Presentation never writes this state.
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Reflect, Default)]
 pub struct PlayerState {
@@ -169,6 +184,16 @@ impl Plugin for ProtocolPlugin {
                 ..default()
             },
         });
+        app.add_channel::<LobbyChannel>(ChannelSettings {
+            mode: ChannelMode::OrderedReliable(ReliableSettings::default()),
+            ..default()
+        })
+        .add_direction(NetworkDirection::Bidirectional);
+        app.register_message::<JoinRequest>()
+            .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<JoinRejected>()
+            .add_direction(NetworkDirection::ServerToClient);
+        app.register_component::<PlayerName>();
         app.register_component::<PlayerId>();
         app.register_component::<crate::weapon::Projectile>()
             .add_linear_interpolation();

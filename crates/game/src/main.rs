@@ -2,6 +2,7 @@ mod baked_material;
 mod loading;
 mod map;
 mod mipmaps;
+mod title;
 mod view;
 mod weapon;
 
@@ -22,6 +23,7 @@ fn main() -> AppExit {
         .add_plugins((
             GameNetworkingPlugin,
             loading::LoadingPlugin,
+            title::TitlePlugin,
             MaterialPlugin::<baked_material::BakedMaterial>::default(),
             view::ViewPlugin,
             weapon::WeaponPlugin,

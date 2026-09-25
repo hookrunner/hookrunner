@@ -2,6 +2,7 @@
 pub mod arena;
 pub mod level;
 pub mod movement;
+pub mod nickname;
 pub mod protocol;
 pub mod weapon;
 

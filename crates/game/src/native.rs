@@ -108,11 +108,12 @@ pub fn configure(app: &mut App) {
 }
 
 fn capture_pointer(
+    session: Res<hookrunner_client::Session>,
     buttons: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
     mut window: Single<(&Window, &mut CursorOptions), With<PrimaryWindow>>,
 ) {
-    if !window.0.focused || keys.just_pressed(KeyCode::Escape) {
+    if !session.is_playing() || !window.0.focused || keys.just_pressed(KeyCode::Escape) {
         window.1.grab_mode = CursorGrabMode::None;
         window.1.visible = true;
     } else if buttons.just_pressed(MouseButton::Left) {
@@ -131,3 +132,5 @@ pub fn finished_loading() {
 
 // The shared Bevy loading screen presents progress on native platforms.
 pub fn loading_progress(_percent: u8, _error: Option<&str>) {}
+
+pub fn set_playing(_playing: bool) {}

@@ -79,3 +79,17 @@ pub fn loading_progress(percent: u8, error: Option<&str>) {
         let _ = bar.set_attribute("value", &percent.to_string());
     }
 }
+
+// Pointer lock is a browser integration detail; Rust owns the current game phase.
+pub fn set_playing(playing: bool) {
+    set_attribute(
+        "game",
+        "data-playing",
+        if playing { "true" } else { "false" },
+    );
+    if !playing {
+        if let Some(document) = web_sys::window().and_then(|window| window.document()) {
+            document.exit_pointer_lock();
+        }
+    }
+}

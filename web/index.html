@@ -32,6 +32,7 @@
     canvas.addEventListener('contextmenu', event => event.preventDefault());
     canvas.addEventListener('click', () => {
       canvas.focus();
+      if (canvas.dataset.playing !== 'true') return;
       if (document.pointerLockElement !== canvas) {
         const pending = canvas.requestPointerLock();
         pending?.catch(error => console.warn('Mouse capture declined:', error));
