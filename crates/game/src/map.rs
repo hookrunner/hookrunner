@@ -186,7 +186,9 @@ pub fn finish_loading(
         .iter()
         .filter(|id| assets.is_loaded_with_dependencies(**id))
         .count();
-    let value = 20 + (70 * loaded / ids.len()) as u8;
+    // Each ready asset, prepared mip chain, and sky setup completes one loading task.
+    let total_tasks = ids.len() + textures.mipmapped.len() + 1;
+    let value = (100 * loaded / total_tasks) as u8;
     if value > progress.percent {
         progress.advance(value);
     }
@@ -194,8 +196,10 @@ pub fn finish_loading(
         return;
     }
 
-    // Prepare one image per frame so the UI remains responsive during mip generation.
-    if let Some(handle) = textures.mipmapped.get(*prepared) {
+    // Process a batch, yielding between textures when about one 60 Hz frame is spent.
+    let started = bevy::platform::time::Instant::now();
+    let budget = std::time::Duration::from_micros(16_667);
+    while let Some(handle) = textures.mipmapped.get(*prepared) {
         let image = images.get_mut(handle).expect("loaded map image");
         assert_eq!(
             image.texture_descriptor.format,
@@ -209,8 +213,10 @@ pub fn finish_loading(
             height,
         );
         *prepared += 1;
-        progress.advance(90 + (9 * *prepared / textures.mipmapped.len()) as u8);
-        return;
+        progress.advance((100 * (ids.len() + *prepared) / total_tasks) as u8);
+        if started.elapsed() >= budget {
+            return;
+        }
     }
     let sky = &textures.sky;
     let image = images.get_mut(sky).expect("loaded sky image");

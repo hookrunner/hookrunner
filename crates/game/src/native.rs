@@ -131,6 +131,6 @@ pub fn finished_loading() {
 }
 
 // The shared Bevy loading screen presents progress on native platforms.
-pub fn loading_progress(_percent: u8, _error: Option<&str>) {}
+pub fn show_loading() {}
 
 pub fn set_playing(_playing: bool) {}
