@@ -1,4 +1,5 @@
 mod baked_material;
+mod kill_feed;
 mod loading;
 mod map;
 mod mipmaps;
@@ -37,6 +38,7 @@ fn main() -> AppExit {
             loading::LoadingPlugin,
             title::TitlePlugin,
             scoreboard::ScoreboardPlugin,
+            kill_feed::KillFeedPlugin,
             MaterialPlugin::<baked_material::BakedMaterial>::default(),
             view::ViewPlugin,
             weapon::WeaponPlugin,

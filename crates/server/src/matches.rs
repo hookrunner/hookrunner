@@ -12,11 +12,13 @@ use std::time::Duration;
 #[derive(Resource)]
 pub struct MatchClock {
     pub remaining: Duration,
+    feed_fraction: Duration,
 }
 impl Default for MatchClock {
     fn default() -> Self {
         Self {
             remaining: Duration::from_secs(MATCH_SECONDS.into()),
+            feed_fraction: Duration::ZERO,
         }
     }
 }
@@ -43,6 +45,18 @@ pub fn advance(
     bolts: Query<Entity, With<Projectile>>,
     mut commands: Commands,
 ) {
+    // Expire transient events on server time, including during results/empty sessions.
+    clock.feed_fraction += time.delta();
+    let seconds = clock.feed_fraction.as_secs();
+    clock.feed_fraction -= Duration::from_secs(seconds);
+    if seconds > 0 && !round.kill_feed.is_empty() {
+        for entry in &mut round.kill_feed {
+            entry.remaining_seconds = entry
+                .remaining_seconds
+                .saturating_sub(seconds.min(u32::MAX as u64) as u32);
+        }
+        round.kill_feed.retain(|entry| entry.remaining_seconds > 0);
+    }
     let mut delta = time.delta();
     let mut reset = false;
     let mut clear_bolts = false;
@@ -52,6 +66,7 @@ pub fn advance(
             round.number += 1;
             round.results = false;
             round.rows.clear();
+            round.kill_feed.clear();
             clock.remaining = Duration::from_secs(MATCH_SECONDS.into());
             reset = true;
             info!("Match {} started", round.number);
