@@ -154,52 +154,77 @@ pub fn finish_loading(
     textures: Option<Res<MapTextures>>,
     weapon: Option<Res<crate::weapon::WeaponAssets>>,
     camera: Single<(Entity, &bevy::camera::Exposure), With<crate::view::PlayerCamera>>,
-    mut finished: Local<bool>,
+    mut progress: ResMut<crate::loading::LoadingProgress>,
+    mut prepared: Local<usize>,
 ) {
-    if *finished {
+    if progress.percent == 100 || progress.error.is_some() {
         return;
     }
-    let Some(textures) = textures else {
+    let (Some(textures), Some(weapon)) = (textures, weapon) else {
         return;
     };
-    if !weapon.is_some_and(|weapon| assets.is_loaded_with_dependencies(weapon.scene.id())) {
-        return;
-    }
-    if textures
+    let mut ids: Vec<_> = textures
         .images
         .iter()
-        .all(|handle| assets.is_loaded_with_dependencies(handle.id()))
-    {
-        for handle in &textures.mipmapped {
-            let image = images.get_mut(handle).expect("loaded map image");
-            assert_eq!(
-                image.texture_descriptor.format,
-                TextureFormat::Rgba8UnormSrgb
-            );
-            let width = image.width() as usize;
-            let height = image.height() as usize;
-            image.texture_descriptor.mip_level_count = crate::mipmaps::append_srgb_mips(
-                image.data.as_mut().expect("decoded map pixels"),
-                width,
-                height,
-            );
+        .map(|handle| handle.id().untyped())
+        .collect();
+    ids.push(weapon.scene.id().untyped());
+    for id in &ids {
+        let failure = match assets.load_state(*id) {
+            bevy::asset::LoadState::Failed(error) => Some(error),
+            _ => match assets.recursive_dependency_load_state(*id) {
+                bevy::asset::RecursiveDependencyLoadState::Failed(error) => Some(error),
+                _ => None,
+            },
+        };
+        if let Some(error) = failure {
+            progress.error = Some(error.to_string());
+            return;
         }
-        let sky = &textures.sky;
-        let image = images.get_mut(sky).expect("loaded sky image");
-        image
-            .reinterpret_stacked_2d_as_array(6)
-            .expect("six square sky faces");
-        image.texture_view_descriptor = Some(TextureViewDescriptor {
-            dimension: Some(TextureViewDimension::Cube),
-            ..default()
-        });
-        commands.entity(camera.0).insert(Skybox {
-            image: sky.clone(),
-            // Preserve source sky colors, independent of the player material exposure.
-            brightness: camera.1.exposure().recip(),
-            ..default()
-        });
-        crate::platform::finished_loading();
-        *finished = true;
     }
+    let loaded = ids
+        .iter()
+        .filter(|id| assets.is_loaded_with_dependencies(**id))
+        .count();
+    let value = 20 + (70 * loaded / ids.len()) as u8;
+    if value > progress.percent {
+        progress.advance(value);
+    }
+    if loaded != ids.len() {
+        return;
+    }
+
+    // Prepare one image per frame so the UI remains responsive during mip generation.
+    if let Some(handle) = textures.mipmapped.get(*prepared) {
+        let image = images.get_mut(handle).expect("loaded map image");
+        assert_eq!(
+            image.texture_descriptor.format,
+            TextureFormat::Rgba8UnormSrgb
+        );
+        let width = image.width() as usize;
+        let height = image.height() as usize;
+        image.texture_descriptor.mip_level_count = crate::mipmaps::append_srgb_mips(
+            image.data.as_mut().expect("decoded map pixels"),
+            width,
+            height,
+        );
+        *prepared += 1;
+        progress.advance(90 + (9 * *prepared / textures.mipmapped.len()) as u8);
+        return;
+    }
+    let sky = &textures.sky;
+    let image = images.get_mut(sky).expect("loaded sky image");
+    image
+        .reinterpret_stacked_2d_as_array(6)
+        .expect("six square sky faces");
+    image.texture_view_descriptor = Some(TextureViewDescriptor {
+        dimension: Some(TextureViewDimension::Cube),
+        ..default()
+    });
+    commands.entity(camera.0).insert(Skybox {
+        image: sky.clone(),
+        brightness: camera.1.exposure().recip(),
+        ..default()
+    });
+    progress.advance(100);
 }
