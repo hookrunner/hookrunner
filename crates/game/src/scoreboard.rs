@@ -144,9 +144,6 @@ fn present(
             pages
         ));
     }
-    if !round.results {
-        label.push_str("\nHold Tab to view");
-    }
     if text.0 != label {
         text.0 = label;
     }

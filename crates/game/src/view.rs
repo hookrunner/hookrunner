@@ -307,8 +307,7 @@ fn update_hud(
                 "Time left"
             };
             label.push_str(&format!(
-                "\nMatch {} | {phase} {:02}:{:02}\n",
-                round.number,
+                "\n{phase} {:02}:{:02}\n",
                 remaining / 60,
                 remaining % 60
             ));
@@ -336,7 +335,6 @@ fn update_hud(
                     row.deaths
                 ));
             }
-            label.push_str("\nTab: scoreboard");
         }
     }
     if hud.0 != label {

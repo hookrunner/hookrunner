@@ -70,13 +70,6 @@ fn setup(mut commands: Commands) {
                         ..default()
                     },
                 ));
-                panel.spawn((
-                    Text::new("Choose your nickname"),
-                    TextFont {
-                        font_size: 20.0,
-                        ..default()
-                    },
-                ));
                 panel
                     .spawn((
                         Node {
@@ -91,21 +84,13 @@ fn setup(mut commands: Commands) {
                     .with_children(|field| {
                         field.spawn((
                             NicknameText,
-                            Text::new("Type here..."),
+                            Text::new("Nickname"),
                             TextFont {
                                 font_size: 22.0,
                                 ..default()
                             },
                         ));
                     });
-                panel.spawn((
-                    Text::new("1-20 characters | Enter to play\nLetters, numbers, spaces, _ and -"),
-                    TextFont {
-                        font_size: 15.0,
-                        ..default()
-                    },
-                    TextColor(Color::srgb(0.6, 0.68, 0.75)),
-                ));
                 panel
                     .spawn((
                         Button,
@@ -130,6 +115,10 @@ fn setup(mut commands: Commands) {
                     });
                 panel.spawn((
                     StatusText,
+                    Node {
+                        display: Display::None,
+                        ..default()
+                    },
                     Text::new(""),
                     TextFont {
                         font_size: 16.0,
@@ -227,14 +216,16 @@ fn insert_text(draft: &mut NicknameDraft, text: &str) {
         draft.selected = false;
     }
     let remaining = MAX_NICKNAME_CHARS.saturating_sub(draft.value.chars().count());
+    let overflow = text.chars().count() > remaining;
     draft.value.extend(text.chars().take(remaining));
-    draft.error = None;
+    draft.error = overflow.then(|| format!("Use at most {MAX_NICKNAME_CHARS} characters."));
 }
 
 fn present(
     session: Res<Session>,
     draft: Res<NicknameDraft>,
     mut screen: Single<&mut Node, With<TitleScreen>>,
+    mut error_node: Single<&mut Node, (With<StatusText>, Without<TitleScreen>)>,
     mut texts: Query<(
         &mut Text,
         Has<NicknameText>,
@@ -247,6 +238,11 @@ fn present(
     if !session.is_changed() && !draft.is_changed() && previous_playing.is_some() {
         return;
     }
+    error_node.display = if draft.error.is_some() || session.error.is_some() {
+        Display::Flex
+    } else {
+        Display::None
+    };
     let playing = session.is_playing();
     screen.display = if playing {
         Display::None
@@ -263,7 +259,7 @@ fn present(
     for (mut text, nickname, status, label) in &mut texts {
         if nickname {
             text.0 = if draft.value.is_empty() {
-                "Type here...".into()
+                "Nickname".into()
             } else if draft.selected {
                 format!("[{}]", draft.value)
             } else {
