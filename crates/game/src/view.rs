@@ -162,8 +162,10 @@ pub(crate) fn look_input(
     window: Single<(&Window, &CursorOptions), With<PrimaryWindow>>,
     local: Query<&PlayerState, With<Predicted>>,
 ) {
-    look.locked =
-        session.is_playing() && window.0.focused && crate::platform::pointer_locked(window.1);
+    look.locked = session.is_playing()
+        && !local.iter().any(|p| p.match_paused)
+        && window.0.focused
+        && crate::platform::pointer_locked(window.1);
     if look.locked {
         if keys.just_pressed(KeyCode::Space) {
             look.jump_press = look.jump_press.wrapping_add(1);
@@ -253,6 +255,8 @@ fn follow_camera(
 }
 
 fn update_hud(
+    rounds: Query<&hookrunner_shared::match_state::MatchState>,
+    players: Query<&PlayerId, With<Predicted>>,
     stats: Res<NetworkStats>,
     session: Res<Session>,
     time: Res<Time<Real>>,
@@ -273,11 +277,52 @@ fn update_hud(
     } else {
         0.0
     };
-    let label = if session.is_playing() {
+    let mut label = if session.is_playing() {
         format!("{fps:.0} fps, {ping} ms\n{}", session.nickname)
     } else {
         String::new()
     };
+    if session.is_playing() {
+        if let Some(round) = rounds.iter().next() {
+            let remaining = round.remaining_seconds;
+            let phase = if round.results {
+                "Next match"
+            } else {
+                "Time left"
+            };
+            label.push_str(&format!(
+                "\nMatch {} | {phase} {:02}:{:02}\n",
+                round.number,
+                remaining / 60,
+                remaining % 60
+            ));
+            let ranked = round.ranked();
+            for (rank, row) in ranked.iter().take(3).enumerate() {
+                label.push_str(&format!(
+                    "\n{}. {}  {}K / {}D",
+                    rank + 1,
+                    row.nickname,
+                    row.kills,
+                    row.deaths
+                ));
+            }
+            let own = players.iter().next().map(|id| id.0);
+            if let Some((rank, row)) = ranked
+                .iter()
+                .enumerate()
+                .find(|(_, row)| Some(row.id) == own)
+            {
+                label.push_str(&format!(
+                    "\nYou: #{} {}  {}K / {}D",
+                    rank + 1,
+                    row.nickname,
+                    row.kills,
+                    row.deaths
+                ));
+            }
+            label.push_str("\nTab: scoreboard");
+        }
+    }
     if hud.0 != label {
         hud.0 = label;
     }

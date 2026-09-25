@@ -39,6 +39,7 @@ for path in files:
 asset_directories = {
     'stormkeep/built/textures': pathlib.Path('assets/stormkeep/built/textures'),
     'shaders': pathlib.Path('assets/shaders'),
+    'fonts': pathlib.Path('assets/fonts'),
     'weapons/starter_pistol/built': pathlib.Path('assets/weapons/starter_pistol/built'),
 }
 for name, directory in asset_directories.items():

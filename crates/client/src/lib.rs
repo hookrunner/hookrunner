@@ -143,7 +143,14 @@ pub fn update_session(
         With<Client>,
     >,
     players: Query<&PlayerName, With<Predicted>>,
-    replicas: Query<Entity, Or<(With<PlayerId>, With<hookrunner_shared::weapon::Projectile>)>>,
+    replicas: Query<
+        Entity,
+        Or<(
+            With<PlayerId>,
+            With<hookrunner_shared::weapon::Projectile>,
+            With<hookrunner_shared::match_state::MatchState>,
+        )>,
+    >,
 ) {
     let Some(entity) = session.connection else {
         return;

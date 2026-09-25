@@ -1,6 +1,7 @@
 mod build_check;
 mod combat;
 mod loading;
+mod matches;
 
 use bevy::{app::ScheduleRunnerPlugin, prelude::*};
 use hookrunner_shared::{
@@ -28,14 +29,17 @@ fn main() {
         .add_plugins(ProtocolPlugin)
         .add_plugins(loading::LoadingPlugin)
         .insert_resource(BindAddress(address))
-        .add_systems(Startup, start)
+        .init_resource::<hookrunner_shared::match_state::MatchState>()
+        .init_resource::<matches::MatchClock>()
+        .add_systems(Startup, (start, matches::setup))
+        .add_systems(PreUpdate, matches::advance)
         .add_observer(configure_link)
         .add_systems(Update, spawn_players)
         .add_observer(log_disconnect)
         .add_systems(FixedUpdate, (simulate, combat::advance_projectiles).chain())
         .add_systems(
             PostUpdate,
-            combat::publish_projectiles.before(ReplicationSystems::Send),
+            (combat::publish_projectiles, matches::publish).before(ReplicationSystems::Send),
         )
         .run();
 }
@@ -91,6 +95,7 @@ fn spawn_players(
         (With<ClientOf>, With<Connected>),
     >,
     players: Query<&PlayerState>,
+    round: Res<hookrunner_shared::match_state::MatchState>,
     mut commands: Commands,
 ) {
     let mut occupied: Vec<_> = players.iter().map(|p| p.position).collect();
@@ -129,6 +134,7 @@ fn spawn_players(
                     view_yaw_offset: spawn.yaw,
                     spawn_index: spawn_index as u8,
                     grounded: true,
+                    match_paused: round.results,
                     ..default()
                 },
                 Replicate::to_clients(NetworkTarget::All),
@@ -151,11 +157,16 @@ fn spawn_players(
 
 fn simulate(
     mut commands: Commands,
+    mut round: ResMut<hookrunner_shared::match_state::MatchState>,
     mut players: Query<(&PlayerId, &mut PlayerState, &ActionState<PlayerInput>)>,
 ) {
     for (id, mut state, input) in &mut players {
+        let was_alive = state.death.is_none();
         let previous_shot = state.weapon.shot;
         movement::step(&mut state, &input.0);
+        if was_alive && state.death.is_some() {
+            round.record_death(id.0, None);
+        }
         if state.weapon.shot != previous_shot {
             commands.spawn(Projectile::from_shot(id.0, &state, &input.0));
         }
