@@ -28,8 +28,10 @@ files = sorted(package.iterdir())
 digest = hashlib.sha256()
 template = pathlib.Path('web/index.html').read_text()
 build_sync = pathlib.Path('web/build-sync.js').read_text()
+loading = pathlib.Path('web/loading.js').read_text()
 digest.update(template.encode())
 digest.update(build_sync.encode())
+digest.update(loading.encode())
 for path in files:
     digest.update(path.name.encode())
     with path.open('rb') as source:
@@ -37,6 +39,7 @@ for path in files:
 asset_directories = {
     'stormkeep/built/textures': pathlib.Path('assets/stormkeep/built/textures'),
     'shaders': pathlib.Path('assets/shaders'),
+    'fonts': pathlib.Path('assets/fonts'),
     'weapons/starter_pistol/built': pathlib.Path('assets/weapons/starter_pistol/built'),
 }
 for name, directory in asset_directories.items():
@@ -77,6 +80,9 @@ page = template.replace('__HOOKRUNNER_WEB_MODULE__', f'./pkg/{version}/hookrunne
 page = page.replace('__HOOKRUNNER_ASSET_ROOT__', f'./pkg/{version}/assets')
 page = page.replace('__HOOKRUNNER_BUILD__', version)
 page = page.replace('__HOOKRUNNER_BUILD_SYNC__', build_sync)
+page = page.replace('__HOOKRUNNER_LOADING__', loading)
+page = page.replace('__HOOKRUNNER_WASM_URL__', f'./pkg/{version}/hookrunner_web_bg.wasm')
+page = page.replace('__HOOKRUNNER_WASM_BYTES__', str((package / 'hookrunner_web_bg.wasm').stat().st_size))
 staged_page = pathlib.Path('dist/.index.html.tmp')
 staged_page.write_text(page)
 staged_page.replace('dist/index.html')

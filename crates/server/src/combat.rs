@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use hookrunner_shared::{
-    PlayerId, PlayerInput, PlayerState, TICK_DURATION, level, movement,
+    PlayerId, PlayerInput, PlayerState, TICK_DURATION, health, level,
     weapon::{self, Impact, Projectile},
 };
 use lightyear::prelude::{input::native::ActionState, *};
@@ -22,8 +22,12 @@ pub fn publish_projectiles(
 pub fn advance_projectiles(
     mut commands: Commands,
     mut projectiles: Query<(Entity, &mut Projectile)>,
+    mut round: ResMut<hookrunner_shared::match_state::MatchState>,
     mut players: Query<(&PlayerId, &mut PlayerState, &ActionState<PlayerInput>)>,
 ) {
+    if round.results {
+        return;
+    }
     for (entity, mut bolt) in &mut projectiles {
         let delta = bolt.direction * weapon::PROJECTILE_SPEED * TICK_DURATION.as_secs_f32();
         let hit = weapon::trace(
@@ -35,8 +39,14 @@ pub fn advance_projectiles(
         if let Some((_, impact)) = hit {
             if let Impact::Player(victim) = impact {
                 for (id, mut state, input) in &mut players {
-                    if id.0 == victim {
-                        movement::kill(&mut state, input.0.pitch_radians());
+                    if id.0 == victim && state.death.is_none() {
+                        if health::apply_damage(
+                            &mut state,
+                            weapon::PROJECTILE_DAMAGE,
+                            input.0.pitch_radians(),
+                        ) {
+                            round.record_death(victim, Some(bolt.owner));
+                        }
                         break;
                     }
                 }

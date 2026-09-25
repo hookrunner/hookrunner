@@ -45,9 +45,12 @@ pub fn pointer_locked(_cursor: &CursorOptions) -> bool {
         .is_some_and(|d| d.pointer_lock_element().is_some())
 }
 
-pub fn finished_loading() {
+// Once Bevy starts, its shared loading screen owns the loading phase.
+pub fn show_loading() {
     set_attribute("loading", "style", "display:none");
 }
+
+pub fn finished_loading() {}
 
 fn set_attribute(id: &str, name: &str, value: &str) {
     if let Some(element) = web_sys::window()
@@ -55,5 +58,19 @@ fn set_attribute(id: &str, name: &str, value: &str) {
         .and_then(|d| d.get_element_by_id(id))
     {
         element.set_attribute(name, value).unwrap();
+    }
+}
+
+// Pointer lock is a browser integration detail; Rust owns the current game phase.
+pub fn set_playing(playing: bool) {
+    set_attribute(
+        "game",
+        "data-playing",
+        if playing { "true" } else { "false" },
+    );
+    if !playing {
+        if let Some(document) = web_sys::window().and_then(|window| window.document()) {
+            document.exit_pointer_lock();
+        }
     }
 }

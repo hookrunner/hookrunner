@@ -5,7 +5,7 @@ use bevy::{
     prelude::*,
     window::{CursorOptions, PrimaryWindow},
 };
-use hookrunner_client::NetworkStats;
+use hookrunner_client::{NetworkStats, Session};
 use hookrunner_shared::{PlayerId, PlayerInput, PlayerState, arena, level, movement};
 use lightyear::prelude::{client::input::InputSystems, input::native::*, *};
 
@@ -156,12 +156,16 @@ fn attach_visuals(
 
 pub(crate) fn look_input(
     mut look: ResMut<Look>,
+    session: Res<Session>,
     motion: Res<AccumulatedMouseMotion>,
     keys: Res<ButtonInput<KeyCode>>,
     window: Single<(&Window, &CursorOptions), With<PrimaryWindow>>,
     local: Query<&PlayerState, With<Predicted>>,
 ) {
-    look.locked = window.0.focused && crate::platform::pointer_locked(window.1);
+    look.locked = session.is_playing()
+        && !local.iter().any(|p| p.match_paused)
+        && window.0.focused
+        && crate::platform::pointer_locked(window.1);
     if look.locked {
         if keys.just_pressed(KeyCode::Space) {
             look.jump_press = look.jump_press.wrapping_add(1);
@@ -251,7 +255,10 @@ fn follow_camera(
 }
 
 fn update_hud(
+    rounds: Query<&hookrunner_shared::match_state::MatchState>,
+    players: Query<(&PlayerId, &PlayerState), With<Predicted>>,
     stats: Res<NetworkStats>,
+    session: Res<Session>,
     time: Res<Time<Real>>,
     mut elapsed: Local<f32>,
     mut hud: Single<&mut Text, With<Hud>>,
@@ -270,7 +277,66 @@ fn update_hud(
     } else {
         0.0
     };
-    let label = format!("{fps:.0} fps, {ping} ms");
+    let mut label = if session.is_playing() {
+        format!("{fps:.0} fps, {ping} ms\n{}", session.nickname)
+    } else {
+        String::new()
+    };
+    if session.is_playing() {
+        if let Some((_, state)) = players.iter().next() {
+            label.push_str(&format!(
+                "\nHP: {} / {}",
+                state.health.0,
+                hookrunner_shared::health::MAX_HEALTH
+            ));
+            if let Some(death) = state.death {
+                if state.match_paused {
+                    label.push_str(" | Waiting for next match");
+                } else {
+                    let seconds =
+                        (death.remaining_ticks as f64 / hookrunner_shared::TICK_HZ).ceil() as u32;
+                    label.push_str(&format!(" | Respawn in {seconds}s"));
+                }
+            }
+        }
+        if let Some(round) = rounds.iter().next() {
+            let remaining = round.remaining_seconds;
+            let phase = if round.results {
+                "Next match"
+            } else {
+                "Time left"
+            };
+            label.push_str(&format!(
+                "\n{phase} {:02}:{:02}\n",
+                remaining / 60,
+                remaining % 60
+            ));
+            let ranked = round.ranked();
+            for (rank, row) in ranked.iter().take(3).enumerate() {
+                label.push_str(&format!(
+                    "\n{}. {}  {}K / {}D",
+                    rank + 1,
+                    row.nickname,
+                    row.kills,
+                    row.deaths
+                ));
+            }
+            let own = players.iter().next().map(|(id, _)| id.0);
+            if let Some((rank, row)) = ranked
+                .iter()
+                .enumerate()
+                .find(|(_, row)| Some(row.id) == own)
+            {
+                label.push_str(&format!(
+                    "\nYou: #{} {}  {}K / {}D",
+                    rank + 1,
+                    row.nickname,
+                    row.kills,
+                    row.deaths
+                ));
+            }
+        }
+    }
     if hud.0 != label {
         hud.0 = label;
     }

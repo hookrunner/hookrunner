@@ -11,11 +11,7 @@
     canvas { display: block; width: 100%; height: 100%; outline: none; }
     #loading { position: absolute; inset: 0; display: grid; place-content: center; padding: 2rem; background: #111; text-align: center; z-index: 2; }
     #status { margin: 0; font: 20px/1.5 ui-monospace, monospace; }
-    .dot-two { animation: dot-two .375s steps(1, end) infinite; }
-    .dot-three { animation: dot-three .375s steps(1, end) infinite; }
-    @keyframes dot-two { 0% { opacity: 0; } 33.333%, 100% { opacity: 1; } }
-    @keyframes dot-three { 0% { opacity: 0; } 66.667%, 100% { opacity: 1; } }
-    @media (prefers-reduced-motion: reduce) { .dot-two, .dot-three { animation: none; } }
+    #progress { width: 240px; max-width: 100%; height: 6px; margin: 1rem auto 0; accent-color: #c8c8c8; }
     #error { margin: .75rem 0 0; max-width: 36rem; font-size: 14px; line-height: 1.5; white-space: pre-wrap; }
     #error:empty { display: none; }
   </style>
@@ -24,16 +20,19 @@
   <main id="arena" data-build="__HOOKRUNNER_BUILD__" data-asset-root="__HOOKRUNNER_ASSET_ROOT__">
     <canvas id="game" tabindex="0" aria-label="Hookrunner multiplayer arena"></canvas>
     <div id="loading">
-      <p id="status" role="status" aria-label="loading">loading<span aria-hidden="true">.<span class="dot-two">.</span><span class="dot-three">.</span></span></p>
+      <p id="status" role="status" aria-live="polite">Downloading client 0%</p>
+      <progress id="progress" max="100" value="0" aria-label="Client download progress"></progress>
       <p id="error"></p>
     </div>
   </main>
   <script type="module">
     __HOOKRUNNER_BUILD_SYNC__
+    __HOOKRUNNER_LOADING__
     const canvas = document.querySelector('#game');
     canvas.addEventListener('contextmenu', event => event.preventDefault());
     canvas.addEventListener('click', () => {
       canvas.focus();
+      if (canvas.dataset.playing !== 'true') return;
       if (document.pointerLockElement !== canvas) {
         const pending = canvas.requestPointerLock();
         pending?.catch(error => console.warn('Mouse capture declined:', error));
@@ -46,11 +45,15 @@
     };
     window.addEventListener('error', event => fail(event.error ?? event.message));
     window.addEventListener('unhandledrejection', event => fail(event.reason));
-    const loadingText = document.querySelector('#status').innerHTML;
+    const showProgress = (stage, percent) => {
+      document.querySelector('#status').textContent = `${stage} ${percent}%`;
+      document.querySelector('#progress').value = percent;
+      document.querySelector('#progress').setAttribute('aria-label', stage);
+    };
     const loading = () => {
       document.exitPointerLock();
       document.querySelector('#loading').style.display = 'grid';
-      document.querySelector('#status').innerHTML = loadingText;
+      showProgress('Downloading client', 0);
       document.querySelector('#error').textContent = '';
     };
     watchBuild({
@@ -58,7 +61,8 @@
       onCurrent: async () => {
         loading();
         const { default: init } = await import('__HOOKRUNNER_WEB_MODULE__');
-        await init();
+        const wasm = await fetchWasm('__HOOKRUNNER_WASM_URL__', __HOOKRUNNER_WASM_BYTES__, percent => showProgress('Downloading client', percent));
+        await init({ module_or_path: wasm });
       },
       onReload: loading,
       onError: fail,

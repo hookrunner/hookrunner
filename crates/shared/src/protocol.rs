@@ -5,6 +5,21 @@ use serde::{Deserialize, Serialize};
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct PlayerId(pub u64);
 
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct PlayerName(pub String);
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct JoinRequest {
+    pub nickname: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct JoinRejected {
+    pub reason: String,
+}
+
+pub struct LobbyChannel;
+
 /// Feet position, planar/vertical velocity and body yaw. Presentation never writes this state.
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Reflect, Default)]
 pub struct PlayerState {
@@ -15,7 +30,9 @@ pub struct PlayerState {
     pub dash: DashState,
     pub jump: JumpState,
     pub weapon: crate::weapon::WeaponState,
+    pub health: crate::health::Health,
     pub grounded: bool,
+    pub match_paused: bool,
     pub death: Option<DeathState>,
     /// Map-authored spawn heading and portal rotations relative to raw mouse aim.
     pub view_yaw_offset: f32,
@@ -86,10 +103,16 @@ impl Ease for PlayerState {
                     + (end.vertical_velocity - start.vertical_velocity) * t,
                 yaw: start.yaw + angle * t,
                 weapon: if t >= 1.0 { end.weapon } else { start.weapon },
+                health: if t >= 1.0 { end.health } else { start.health },
                 // Discrete resource/timer state must not be blended between snapshots.
                 dash: if t >= 1.0 { end.dash } else { start.dash },
                 jump: if t >= 1.0 { end.jump } else { start.jump },
                 death: if t >= 1.0 { end.death } else { start.death },
+                match_paused: if t >= 1.0 {
+                    end.match_paused
+                } else {
+                    start.match_paused
+                },
                 grounded: if t >= 1.0 {
                     end.grounded
                 } else {
@@ -169,6 +192,17 @@ impl Plugin for ProtocolPlugin {
                 ..default()
             },
         });
+        app.add_channel::<LobbyChannel>(ChannelSettings {
+            mode: ChannelMode::OrderedReliable(ReliableSettings::default()),
+            ..default()
+        })
+        .add_direction(NetworkDirection::Bidirectional);
+        app.register_message::<JoinRequest>()
+            .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<JoinRejected>()
+            .add_direction(NetworkDirection::ServerToClient);
+        app.register_component::<crate::match_state::MatchState>();
+        app.register_component::<PlayerName>();
         app.register_component::<PlayerId>();
         app.register_component::<crate::weapon::Projectile>()
             .add_linear_interpolation();
