@@ -30,6 +30,7 @@ pub struct PlayerState {
     pub dash: DashState,
     pub jump: JumpState,
     pub weapon: crate::weapon::WeaponState,
+    pub health: crate::health::Health,
     pub grounded: bool,
     pub match_paused: bool,
     pub death: Option<DeathState>,
@@ -102,6 +103,7 @@ impl Ease for PlayerState {
                     + (end.vertical_velocity - start.vertical_velocity) * t,
                 yaw: start.yaw + angle * t,
                 weapon: if t >= 1.0 { end.weapon } else { start.weapon },
+                health: if t >= 1.0 { end.health } else { start.health },
                 // Discrete resource/timer state must not be blended between snapshots.
                 dash: if t >= 1.0 { end.dash } else { start.dash },
                 jump: if t >= 1.0 { end.jump } else { start.jump },

@@ -256,7 +256,7 @@ fn follow_camera(
 
 fn update_hud(
     rounds: Query<&hookrunner_shared::match_state::MatchState>,
-    players: Query<&PlayerId, With<Predicted>>,
+    players: Query<(&PlayerId, &PlayerState), With<Predicted>>,
     stats: Res<NetworkStats>,
     session: Res<Session>,
     time: Res<Time<Real>>,
@@ -283,6 +283,22 @@ fn update_hud(
         String::new()
     };
     if session.is_playing() {
+        if let Some((_, state)) = players.iter().next() {
+            label.push_str(&format!(
+                "\nHP: {} / {}",
+                state.health.0,
+                hookrunner_shared::health::MAX_HEALTH
+            ));
+            if let Some(death) = state.death {
+                if state.match_paused {
+                    label.push_str(" | Waiting for next match");
+                } else {
+                    let seconds =
+                        (death.remaining_ticks as f64 / hookrunner_shared::TICK_HZ).ceil() as u32;
+                    label.push_str(&format!(" | Respawn in {seconds}s"));
+                }
+            }
+        }
         if let Some(round) = rounds.iter().next() {
             let remaining = round.remaining_seconds;
             let phase = if round.results {
@@ -306,7 +322,7 @@ fn update_hud(
                     row.deaths
                 ));
             }
-            let own = players.iter().next().map(|id| id.0);
+            let own = players.iter().next().map(|(id, _)| id.0);
             if let Some((rank, row)) = ranked
                 .iter()
                 .enumerate()

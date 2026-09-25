@@ -46,6 +46,7 @@ pub fn kill(state: &mut PlayerState, pitch: f32) {
     if state.death.is_some() {
         return;
     }
+    state.health.0 = 0;
     state.death = Some(crate::protocol::DeathState {
         remaining_ticks: RESPAWN_TICKS,
         pitch,

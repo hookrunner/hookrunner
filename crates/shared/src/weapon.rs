@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::{PlayerInput, PlayerState, arena, level::CollisionWorld};
 
 pub const FIRE_COOLDOWN_TICKS: u16 = (crate::TICK_HZ * 0.2) as u16;
+pub const PROJECTILE_DAMAGE: u16 = 25;
 pub const PROJECTILE_SPEED: f32 = 60.0;
 pub const PROJECTILE_RADIUS: f32 = 0.045;
 pub const PROJECTILE_LENGTH: f32 = 2.4;
