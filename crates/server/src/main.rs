@@ -5,7 +5,9 @@ mod loading;
 use bevy::{app::ScheduleRunnerPlugin, prelude::*};
 use hookrunner_shared::{
     PlayerId, PlayerInput, PlayerState, ProtocolPlugin, SEND_INTERVAL, TICK_DURATION, TICK_HZ,
-    arena, movement, weapon::Projectile,
+    arena, movement,
+    protocol::{JoinRejected, JoinRequest, LobbyChannel, PlayerName},
+    weapon::Projectile,
 };
 use lightyear::prelude::{input::native::ActionState, server::*, *};
 use std::{net::SocketAddr, time::Duration};
@@ -28,7 +30,7 @@ fn main() {
         .insert_resource(BindAddress(address))
         .add_systems(Startup, start)
         .add_observer(configure_link)
-        .add_observer(spawn_player)
+        .add_systems(Update, spawn_players)
         .add_observer(log_disconnect)
         .add_systems(FixedUpdate, (simulate, combat::advance_projectiles).chain())
         .add_systems(
@@ -74,45 +76,77 @@ fn configure_link(event: On<Add, LinkOf>, mut commands: Commands) {
     ));
 }
 
-fn spawn_player(
-    event: On<Add, Connected>,
-    links: Query<&RemoteId, With<ClientOf>>,
+#[derive(Component)]
+struct Joined;
+
+fn spawn_players(
+    mut links: Query<
+        (
+            Entity,
+            &RemoteId,
+            &mut MessageReceiver<JoinRequest>,
+            &mut MessageSender<JoinRejected>,
+            Has<Joined>,
+        ),
+        (With<ClientOf>, With<Connected>),
+    >,
     players: Query<&PlayerState>,
     mut commands: Commands,
 ) {
-    let Ok(remote) = links.get(event.entity) else {
-        return;
-    };
-    let occupied: Vec<_> = players.iter().map(|p| p.position).collect();
-    if occupied.len() >= arena::MAX_PLAYERS {
-        commands.trigger(Disconnect {
-            entity: event.entity,
-        });
-        return;
+    let mut occupied: Vec<_> = players.iter().map(|p| p.position).collect();
+    for (entity, remote, mut requests, mut replies, already_joined) in &mut links {
+        let mut joined = already_joined;
+        for request in requests.receive() {
+            if joined {
+                continue;
+            }
+            let name = match hookrunner_shared::nickname::validate(&request.nickname) {
+                Ok(name) => name,
+                Err(reason) => {
+                    replies.send::<LobbyChannel>(JoinRejected {
+                        reason: reason.into(),
+                    });
+                    continue;
+                }
+            };
+            if occupied.len() >= arena::MAX_PLAYERS {
+                replies.send::<LobbyChannel>(JoinRejected {
+                    reason: "The server is full. Please try again later.".into(),
+                });
+                continue;
+            }
+            let spawn_index = arena::choose_spawn(rand::random::<u32>() as usize, &occupied);
+            let spawn = arena::spawn(spawn_index);
+            let position = spawn.position;
+            occupied.push(position);
+            let id = rand::random::<u64>();
+            commands.spawn((
+                PlayerId(id),
+                PlayerName(name.clone()),
+                PlayerState {
+                    position,
+                    yaw: spawn.yaw,
+                    view_yaw_offset: spawn.yaw,
+                    spawn_index: spawn_index as u8,
+                    grounded: true,
+                    ..default()
+                },
+                Replicate::to_clients(NetworkTarget::All),
+                PredictionTarget::to_clients(NetworkTarget::Single(remote.0)),
+                InterpolationTarget::to_clients(NetworkTarget::AllExceptSingle(remote.0)),
+                ControlledBy {
+                    owner: entity,
+                    lifetime: Default::default(),
+                },
+            ));
+            commands.entity(entity).insert(Joined);
+            joined = true;
+            info!(
+                "Player {id:016x} ({name}) joined at {position} ({:?})",
+                remote.0
+            );
+        }
     }
-    let spawn_index = arena::choose_spawn(rand::random::<u32>() as usize, &occupied);
-    let spawn = arena::spawn(spawn_index);
-    let position = spawn.position;
-    let id = rand::random::<u64>();
-    commands.spawn((
-        PlayerId(id),
-        PlayerState {
-            position,
-            yaw: spawn.yaw,
-            view_yaw_offset: spawn.yaw,
-            spawn_index: spawn_index as u8,
-            grounded: true,
-            ..default()
-        },
-        Replicate::to_clients(NetworkTarget::All),
-        PredictionTarget::to_clients(NetworkTarget::Single(remote.0)),
-        InterpolationTarget::to_clients(NetworkTarget::AllExceptSingle(remote.0)),
-        ControlledBy {
-            owner: event.entity,
-            lifetime: Default::default(),
-        },
-    ));
-    info!("Player {id:016x} joined at {position} ({:?})", remote.0);
 }
 
 fn simulate(

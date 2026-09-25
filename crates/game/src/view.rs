@@ -5,7 +5,7 @@ use bevy::{
     prelude::*,
     window::{CursorOptions, PrimaryWindow},
 };
-use hookrunner_client::NetworkStats;
+use hookrunner_client::{NetworkStats, Session};
 use hookrunner_shared::{PlayerId, PlayerInput, PlayerState, arena, level, movement};
 use lightyear::prelude::{client::input::InputSystems, input::native::*, *};
 
@@ -156,12 +156,14 @@ fn attach_visuals(
 
 pub(crate) fn look_input(
     mut look: ResMut<Look>,
+    session: Res<Session>,
     motion: Res<AccumulatedMouseMotion>,
     keys: Res<ButtonInput<KeyCode>>,
     window: Single<(&Window, &CursorOptions), With<PrimaryWindow>>,
     local: Query<&PlayerState, With<Predicted>>,
 ) {
-    look.locked = window.0.focused && crate::platform::pointer_locked(window.1);
+    look.locked =
+        session.is_playing() && window.0.focused && crate::platform::pointer_locked(window.1);
     if look.locked {
         if keys.just_pressed(KeyCode::Space) {
             look.jump_press = look.jump_press.wrapping_add(1);
@@ -252,6 +254,7 @@ fn follow_camera(
 
 fn update_hud(
     stats: Res<NetworkStats>,
+    session: Res<Session>,
     time: Res<Time<Real>>,
     mut elapsed: Local<f32>,
     mut hud: Single<&mut Text, With<Hud>>,
@@ -270,7 +273,11 @@ fn update_hud(
     } else {
         0.0
     };
-    let label = format!("{fps:.0} fps, {ping} ms");
+    let label = if session.is_playing() {
+        format!("{fps:.0} fps, {ping} ms\n{}", session.nickname)
+    } else {
+        String::new()
+    };
     if hud.0 != label {
         hud.0 = label;
     }
