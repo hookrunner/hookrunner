@@ -91,7 +91,7 @@ fn setup(mut commands: Commands) {
                     .with_children(|field| {
                         field.spawn((
                             NicknameText,
-                            Text::new("Type here…"),
+                            Text::new("Type here..."),
                             TextFont {
                                 font_size: 22.0,
                                 ..default()
@@ -99,7 +99,7 @@ fn setup(mut commands: Commands) {
                         ));
                     });
                 panel.spawn((
-                    Text::new("1–20 characters · Enter to play\nLetters, numbers, spaces, _ and -"),
+                    Text::new("1-20 characters | Enter to play\nLetters, numbers, spaces, _ and -"),
                     TextFont {
                         font_size: 15.0,
                         ..default()
@@ -263,7 +263,7 @@ fn present(
     for (mut text, nickname, status, label) in &mut texts {
         if nickname {
             text.0 = if draft.value.is_empty() {
-                "Type here…".into()
+                "Type here...".into()
             } else if draft.selected {
                 format!("[{}]", draft.value)
             } else {
@@ -278,7 +278,7 @@ fn present(
                 .unwrap_or_default();
         } else if label {
             text.0 = if session.phase == SessionPhase::Connecting {
-                "Connecting…"
+                "Connecting..."
             } else {
                 "Play"
             }
