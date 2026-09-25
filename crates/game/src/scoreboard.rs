@@ -113,10 +113,7 @@ fn present(
             round.remaining_seconds % 60
         )
     };
-    let mut label = format!(
-        "MATCH {} — {heading}\n{clock}\n\n    #  NICKNAME               KILLS DEATHS\n",
-        round.number
-    );
+    let mut label = format!("{heading}\n{clock}\n\n    #  NICKNAME               KILLS DEATHS\n");
     for (rank, row) in rows
         .iter()
         .enumerate()
