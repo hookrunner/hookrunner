@@ -19,6 +19,11 @@ pub const RESPAWN_TICKS: u16 = (crate::TICK_HZ * 3.0) as u16;
 
 /// One simulation tick. Same function on the authoritative server and during client replay.
 pub fn step(state: &mut PlayerState, input: &PlayerInput) {
+    if state.match_paused {
+        state.jump.last_press = input.jump_press;
+        state.dash.last_press = input.dash_press;
+        return;
+    }
     if let Some(death) = &mut state.death {
         // Consume presses throughout death, including the respawn tick. They
         // must never become queued jumps/dashes when control returns.
@@ -41,6 +46,7 @@ pub fn kill(state: &mut PlayerState, pitch: f32) {
     if state.death.is_some() {
         return;
     }
+    state.health.0 = 0;
     state.death = Some(crate::protocol::DeathState {
         remaining_ticks: RESPAWN_TICKS,
         pitch,
@@ -50,7 +56,7 @@ pub fn kill(state: &mut PlayerState, pitch: f32) {
     state.dash.remaining_ticks = 0;
 }
 
-fn respawn(state: &mut PlayerState, input: &PlayerInput) {
+pub fn respawn(state: &mut PlayerState, input: &PlayerInput) {
     let index = (state.spawn_index as usize + 1) % level::data().spawns.len();
     let spawn = crate::arena::spawn(index);
     *state = PlayerState {

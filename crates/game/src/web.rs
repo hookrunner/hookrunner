@@ -45,9 +45,12 @@ pub fn pointer_locked(_cursor: &CursorOptions) -> bool {
         .is_some_and(|d| d.pointer_lock_element().is_some())
 }
 
-pub fn finished_loading() {
+// Once Bevy starts, its shared loading screen owns the loading phase.
+pub fn show_loading() {
     set_attribute("loading", "style", "display:none");
 }
+
+pub fn finished_loading() {}
 
 fn set_attribute(id: &str, name: &str, value: &str) {
     if let Some(element) = web_sys::window()
@@ -58,24 +61,16 @@ fn set_attribute(id: &str, name: &str, value: &str) {
     }
 }
 
-// Mirror the shared state while the browser bootstrap overlay covers the canvas.
-// Asset readiness and percentage calculation remain in Rust on both platforms.
-pub fn loading_progress(percent: u8, error: Option<&str>) {
-    let Some(document) = web_sys::window().and_then(|w| w.document()) else {
-        return;
-    };
-    if let Some(status) = document.get_element_by_id("status") {
-        let text = if error.is_some() {
-            format!("Loading failed at {percent}%")
-        } else {
-            format!("Loading {percent}%")
-        };
-        status.set_text_content(Some(&text));
-    }
-    if let Some(message) = document.get_element_by_id("error") {
-        message.set_text_content(error);
-    }
-    if let Some(bar) = document.get_element_by_id("progress") {
-        let _ = bar.set_attribute("value", &percent.to_string());
+// Pointer lock is a browser integration detail; Rust owns the current game phase.
+pub fn set_playing(playing: bool) {
+    set_attribute(
+        "game",
+        "data-playing",
+        if playing { "true" } else { "false" },
+    );
+    if !playing {
+        if let Some(document) = web_sys::window().and_then(|window| window.document()) {
+            document.exit_pointer_lock();
+        }
     }
 }
