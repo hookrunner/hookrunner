@@ -18,6 +18,9 @@ const REST_POSITION: Vec3 = Vec3::new(0.23, -0.20, -0.46);
 const MUZZLE_CLEARANCE: f32 = 0.015;
 const FLASH_HALF_LENGTH: f32 = 0.055;
 const IMPACT_RADIUS: f32 = 0.32;
+const BOLT_START_RADIUS: f32 = 0.02;
+const BOLT_MAX_RADIUS: f32 = 0.16;
+const BOLT_GROW_DISTANCE: f32 = 22.0;
 
 pub struct WeaponPlugin;
 impl Plugin for WeaponPlugin {
@@ -94,7 +97,7 @@ fn setup(
             GltfAssetLabel::Scene(0).from_asset("weapons/starter_pistol/built/starter_pistol.glb"),
         ),
         beam: meshes.add(Cuboid::new(1., 1., 1.)),
-        spark: meshes.add(Sphere::new(1.).mesh().ico(1).unwrap()),
+        spark: meshes.add(Sphere::new(1.).mesh().ico(2).unwrap()),
         cyan: materials.add(StandardMaterial {
             base_color: Color::srgb(0.45, 0.85, 1.),
             unlit: true,
@@ -199,9 +202,9 @@ fn prepare_view_model(
 
 fn beam_children(parent: &mut ChildSpawnerCommands, assets: &WeaponAssets, length: f32) {
     for (width, material) in [
-        (0.16, &assets.glow),
-        (0.08, &assets.cyan),
-        (0.0325, &assets.core),
+        (0.04, &assets.glow),
+        (0.02, &assets.cyan),
+        (0.008, &assets.core),
     ] {
         parent.spawn((
             Mesh3d(assets.beam.clone()),
@@ -210,8 +213,8 @@ fn beam_children(parent: &mut ChildSpawnerCommands, assets: &WeaponAssets, lengt
             NotShadowCaster,
         ));
     }
-    for (scale, material) in [(1.0, &assets.glow), (0.28, &assets.core)] {
-        let radius = weapon::PROJECTILE_START_RADIUS * scale;
+    for (scale, material) in [(1.0, &assets.glow), (0.45, &assets.core)] {
+        let radius = BOLT_START_RADIUS * scale;
         parent.spawn((
             BoltHead(scale),
             Mesh3d(assets.spark.clone()),
@@ -346,6 +349,12 @@ fn bolt_length(bolt: &Projectile) -> f32 {
         .clamp(0.02, weapon::PROJECTILE_LENGTH)
 }
 
+fn bolt_visual_radius(bolt: &Projectile) -> f32 {
+    let progress = (bolt.position.distance(bolt.origin) / BOLT_GROW_DISTANCE).clamp(0.0, 1.0);
+    let eased = progress * progress * (3.0 - 2.0 * progress);
+    BOLT_START_RADIUS + (BOLT_MAX_RADIUS - BOLT_START_RADIUS) * eased
+}
+
 fn bolt_transform(bolt: &Projectile) -> Transform {
     let length = bolt_length(bolt);
     Transform::from_translation(bolt.position - bolt.direction * length / 2.)
@@ -388,7 +397,7 @@ fn advance_local_bolts(
         };
         *transform = bolt_transform(&visual);
         let length = bolt_length(&visual);
-        let radius = local.bolt.radius_at(local.bolt.position);
+        let radius = bolt_visual_radius(&local.bolt);
         for child in children {
             if let Ok((head, mut head_transform)) = heads.get_mut(*child) {
                 let radius = radius * head.0;
@@ -432,7 +441,7 @@ fn sync_bolts(
         };
         *transform = bolt_transform(bolt);
         let length = bolt_length(bolt);
-        let radius = bolt.radius_at(bolt.position);
+        let radius = bolt_visual_radius(bolt);
         for child in children {
             if let Ok((head, mut head_transform)) = heads.get_mut(*child) {
                 let radius = radius * head.0;
