@@ -46,6 +46,7 @@ pub enum SessionPhase {
 pub struct Session {
     pub phase: SessionPhase,
     pub nickname: String,
+    pub color: u8,
     pub error: Option<String>,
     connection: Option<Entity>,
     elapsed: f32,
@@ -60,6 +61,7 @@ impl Session {
 #[derive(Event)]
 pub struct JoinGame {
     pub nickname: String,
+    pub color: u8,
 }
 
 fn connect(
@@ -78,7 +80,12 @@ fn connect(
             return;
         }
     };
+    if hookrunner_shared::player_color::PlayerColor::new(event.color).is_none() {
+        session.error = Some("Choose a valid color.".into());
+        return;
+    }
     session.nickname = nickname;
+    session.color = event.color;
     session.error = None;
     session.elapsed = 0.0;
     session.phase = SessionPhase::Connecting;
@@ -130,6 +137,7 @@ fn send_join(
     for mut sender in &mut connections {
         sender.send::<LobbyChannel>(JoinRequest {
             nickname: session.nickname.clone(),
+            color: session.color,
         });
     }
 }
@@ -142,7 +150,7 @@ pub fn update_session(
         (Option<&Disconnected>, &mut MessageReceiver<JoinRejected>),
         With<Client>,
     >,
-    players: Query<&PlayerName, With<Predicted>>,
+    players: Query<(&PlayerName, &hookrunner_shared::player_color::PlayerColor), With<Predicted>>,
     replicas: Query<
         Entity,
         Or<(
@@ -170,8 +178,9 @@ pub fn update_session(
     }
     if session.phase == SessionPhase::Connecting {
         session.elapsed += time.delta_secs();
-        if let Some(name) = players.iter().next() {
+        if let Some((name, color)) = players.iter().next() {
             session.nickname = name.0.clone();
+            session.color = color.0;
             session.phase = SessionPhase::Playing;
         } else if session.elapsed >= 15.0 && failure.is_none() {
             failure = Some("Connection timed out. Check the server and try again.".into());

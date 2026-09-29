@@ -7,6 +7,7 @@ use bevy::{app::ScheduleRunnerPlugin, prelude::*};
 use hookrunner_shared::{
     PlayerId, PlayerInput, PlayerState, ProtocolPlugin, SEND_INTERVAL, TICK_DURATION, TICK_HZ,
     arena, movement,
+    player_color::PlayerColor,
     protocol::{JoinRejected, JoinRequest, LobbyChannel, PlayerName},
     weapon::Projectile,
 };
@@ -114,6 +115,12 @@ fn spawn_players(
                     continue;
                 }
             };
+            let Some(color) = PlayerColor::new(request.color) else {
+                replies.send::<LobbyChannel>(JoinRejected {
+                    reason: "Choose a valid color.".into(),
+                });
+                continue;
+            };
             if occupied.len() >= arena::MAX_PLAYERS {
                 replies.send::<LobbyChannel>(JoinRejected {
                     reason: "The server is full. Please try again later.".into(),
@@ -128,6 +135,7 @@ fn spawn_players(
             commands.spawn((
                 PlayerId(id),
                 PlayerName(name.clone()),
+                color,
                 PlayerState {
                     position,
                     yaw: spawn.yaw,

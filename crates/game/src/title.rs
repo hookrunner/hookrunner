@@ -4,7 +4,10 @@ use bevy::{
     prelude::*,
 };
 use hookrunner_client::{JoinGame, Session, SessionPhase};
-use hookrunner_shared::nickname::{self, MAX_NICKNAME_CHARS};
+use hookrunner_shared::{
+    nickname::{self, MAX_NICKNAME_CHARS},
+    player_color::{PALETTE, PlayerColor},
+};
 
 pub struct TitlePlugin;
 impl Plugin for TitlePlugin {
@@ -23,6 +26,7 @@ impl Plugin for TitlePlugin {
 #[derive(Resource, Default)]
 struct NicknameDraft {
     value: String,
+    color: u8,
     error: Option<String>,
     selected: bool,
     composing: bool,
@@ -37,6 +41,8 @@ struct StatusText;
 struct PlayButton;
 #[derive(Component)]
 struct PlayLabel;
+#[derive(Component)]
+struct ColorChoice(u8);
 
 fn setup(mut commands: Commands) {
     commands
@@ -91,6 +97,42 @@ fn setup(mut commands: Commands) {
                             },
                         ));
                     });
+                panel.spawn((
+                    Text::new("Color"),
+                    TextFont {
+                        font_size: 16.0,
+                        ..default()
+                    },
+                    TextColor(Color::srgb(0.70, 0.76, 0.82)),
+                ));
+                panel
+                    .spawn(Node {
+                        width: percent(100),
+                        flex_direction: FlexDirection::Row,
+                        justify_content: JustifyContent::SpaceBetween,
+                        ..default()
+                    })
+                    .with_children(|row| {
+                        for index in 0..PALETTE.len() {
+                            let [r, g, b] = PlayerColor(index as u8).rgb();
+                            row.spawn((
+                                Button,
+                                ColorChoice(index as u8),
+                                Node {
+                                    width: px(38),
+                                    height: px(38),
+                                    border: UiRect::all(px(3)),
+                                    ..default()
+                                },
+                                BackgroundColor(Color::srgb(r, g, b)),
+                                BorderColor::all(if index == 0 {
+                                    Color::WHITE
+                                } else {
+                                    Color::NONE
+                                }),
+                            ));
+                        }
+                    });
                 panel
                     .spawn((
                         Button,
@@ -139,11 +181,17 @@ fn edit(
     mut ime: MessageReader<Ime>,
     keys: Res<ButtonInput<KeyCode>>,
     buttons: Query<&Interaction, (Changed<Interaction>, With<PlayButton>)>,
+    choices: Query<(&Interaction, &ColorChoice), Changed<Interaction>>,
 ) {
     if session.phase != SessionPhase::Title || loading.percent != 100 {
         keyboard.clear();
         ime.clear();
         return;
+    }
+    for (interaction, choice) in &choices {
+        if *interaction == Interaction::Pressed {
+            draft.color = choice.0;
+        }
     }
     let mut committed = false;
     for event in ime.read() {
@@ -200,7 +248,10 @@ fn edit(
             Ok(nickname) => {
                 draft.value = nickname.clone();
                 draft.error = None;
-                commands.trigger(JoinGame { nickname });
+                commands.trigger(JoinGame {
+                    nickname,
+                    color: draft.color,
+                });
             }
             Err(error) => draft.error = Some(error.into()),
         }
@@ -226,6 +277,7 @@ fn present(
     draft: Res<NicknameDraft>,
     mut screen: Single<&mut Node, With<TitleScreen>>,
     mut error_node: Single<&mut Node, (With<StatusText>, Without<TitleScreen>)>,
+    mut swatches: Query<(&ColorChoice, &mut BorderColor)>,
     mut texts: Query<(
         &mut Text,
         Has<NicknameText>,
@@ -243,6 +295,10 @@ fn present(
     } else {
         Display::None
     };
+    for (choice, mut border) in &mut swatches {
+        let selected = choice.0 == draft.color;
+        *border = BorderColor::all(if selected { Color::WHITE } else { Color::NONE });
+    }
     let playing = session.is_playing();
     screen.display = if playing {
         Display::None

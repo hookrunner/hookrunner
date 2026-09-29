@@ -6,7 +6,9 @@ use bevy::{
     window::{CursorOptions, PrimaryWindow},
 };
 use hookrunner_client::{NetworkStats, Session};
-use hookrunner_shared::{PlayerId, PlayerInput, PlayerState, arena, level, movement};
+use hookrunner_shared::{
+    PlayerId, PlayerInput, PlayerState, arena, level, movement, player_color::PlayerColor,
+};
 use lightyear::prelude::{client::input::InputSystems, input::native::*, *};
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
@@ -111,11 +113,11 @@ type PlayerWithoutVisual = (With<PlayerId>, Without<PlayerVisual>);
 
 fn attach_visuals(
     mut commands: Commands,
-    players: Query<(Entity, Has<Predicted>), PlayerWithoutVisual>,
+    players: Query<(Entity, Has<Predicted>, &PlayerColor), PlayerWithoutVisual>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    for (entity, local) in &players {
+    for (entity, local, player_color) in &players {
         commands.entity(entity).insert((
             PlayerVisual,
             Transform::default(),
@@ -125,8 +127,9 @@ fn attach_visuals(
                 Visibility::Inherited
             },
         ));
+        let [r, g, b] = player_color.rgb();
         let color = materials.add(StandardMaterial {
-            base_color: Color::srgb(1.0, 0.28, 0.035),
+            base_color: Color::srgb(r, g, b),
             perceptual_roughness: 1.0,
             reflectance: 0.0,
             ..default()
