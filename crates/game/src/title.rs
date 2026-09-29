@@ -105,14 +105,6 @@ fn setup(mut commands: Commands) {
                             },
                         ));
                     });
-                panel.spawn((
-                    Text::new("Color"),
-                    TextFont {
-                        font_size: 16.0,
-                        ..default()
-                    },
-                    TextColor(Color::srgb(0.70, 0.76, 0.82)),
-                ));
                 panel
                     .spawn(Node {
                         width: percent(100),
@@ -252,6 +244,20 @@ fn edit(
         }
         match &event.logical_key {
             Key::Enter if !event.repeat && !committed => submit = true,
+            Key::ArrowLeft | Key::ArrowUp if !modifier => {
+                if let Some(color) = next_color(draft.color, occupied, -1) {
+                    draft.color = color;
+                    draft.error = None;
+                    session.error = None;
+                }
+            }
+            Key::ArrowRight | Key::ArrowDown if !modifier => {
+                if let Some(color) = next_color(draft.color, occupied, 1) {
+                    draft.color = color;
+                    draft.error = None;
+                    session.error = None;
+                }
+            }
             Key::Backspace => {
                 if draft.selected {
                     draft.value.clear();
@@ -295,6 +301,14 @@ fn edit(
 
 fn occupied_colors(colors: &Query<&PlayerColor, With<PlayerId>>) -> u16 {
     colors.iter().fold(0, |mask, color| mask | (1 << color.0))
+}
+
+fn next_color(current: u8, occupied: u16, direction: i32) -> Option<u8> {
+    (1..=PALETTE.len())
+        .map(|offset| {
+            (current as i32 + direction * offset as i32).rem_euclid(PALETTE.len() as i32) as u8
+        })
+        .find(|index| occupied & (1 << index) == 0)
 }
 
 fn insert_text(draft: &mut NicknameDraft, text: &str) {

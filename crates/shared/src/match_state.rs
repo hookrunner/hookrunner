@@ -1,4 +1,5 @@
 //! Authoritative match data, shared with all clients.
+use crate::player_color::PlayerColor;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -10,7 +11,9 @@ pub const KILL_FEED_LIMIT: usize = 5;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct KillEntry {
     pub killer: Option<String>,
+    pub killer_color: Option<PlayerColor>,
     pub victim: String,
+    pub victim_color: PlayerColor,
     pub remaining_seconds: u32,
 }
 
@@ -18,6 +21,7 @@ pub struct KillEntry {
 pub struct ScoreRow {
     pub id: u64,
     pub nickname: String,
+    pub color: PlayerColor,
     pub kills: u32,
     pub deaths: u32,
     pub connected: bool,
@@ -47,19 +51,21 @@ impl MatchState {
         if self.results {
             return;
         }
-        if let Some(victim_name) = self
+        if let Some((victim_name, victim_color)) = self
             .rows
             .iter()
             .find(|r| r.id == victim)
-            .map(|r| r.nickname.clone())
+            .map(|r| (r.nickname.clone(), r.color))
         {
-            let killer_name = killer
+            let killer = killer
                 .filter(|id| *id != victim)
                 .and_then(|id| self.rows.iter().find(|r| r.id == id))
-                .map(|r| r.nickname.clone());
+                .map(|r| (r.nickname.clone(), r.color));
             self.kill_feed.push(KillEntry {
-                killer: killer_name,
+                killer: killer.as_ref().map(|(name, _)| name.clone()),
+                killer_color: killer.map(|(_, color)| color),
                 victim: victim_name,
+                victim_color,
                 remaining_seconds: KILL_FEED_SECONDS,
             });
             if self.kill_feed.len() > KILL_FEED_LIMIT {
