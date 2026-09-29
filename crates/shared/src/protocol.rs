@@ -32,6 +32,8 @@ pub struct PlayerState {
     pub jump: JumpState,
     pub weapon: crate::weapon::WeaponState,
     pub health: crate::health::Health,
+    pub shield: u16,
+    pub speed_ticks: u16,
     pub grounded: bool,
     pub match_paused: bool,
     pub death: Option<DeathState>,
@@ -105,6 +107,12 @@ impl Ease for PlayerState {
                 yaw: start.yaw + angle * t,
                 weapon: if t >= 1.0 { end.weapon } else { start.weapon },
                 health: if t >= 1.0 { end.health } else { start.health },
+                shield: if t >= 1.0 { end.shield } else { start.shield },
+                speed_ticks: if t >= 1.0 {
+                    end.speed_ticks
+                } else {
+                    start.speed_ticks
+                },
                 // Discrete resource/timer state must not be blended between snapshots.
                 dash: if t >= 1.0 { end.dash } else { start.dash },
                 jump: if t >= 1.0 { end.jump } else { start.jump },
@@ -208,6 +216,7 @@ impl Plugin for ProtocolPlugin {
         app.register_component::<PlayerId>();
         app.register_component::<crate::weapon::Projectile>()
             .add_linear_interpolation();
+        app.register_component::<crate::powerups::Pickup>();
         app.register_component::<PlayerState>()
             .add_prediction()
             .add_linear_interpolation();

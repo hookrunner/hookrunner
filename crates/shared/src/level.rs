@@ -18,6 +18,7 @@ const WALKABLE_Y: f32 = 0.65;
 pub struct MapData {
     pub name: String,
     pub spawns: Vec<Spawn>,
+    pub pickup_spawns: Vec<Vec3>,
     pub triggers: Vec<Trigger>,
     pub lightmaps: Vec<String>,
     pub sky: String,

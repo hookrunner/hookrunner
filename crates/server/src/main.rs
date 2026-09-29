@@ -2,6 +2,7 @@ mod build_check;
 mod combat;
 mod loading;
 mod matches;
+mod powerups;
 
 use bevy::{app::ScheduleRunnerPlugin, prelude::*};
 use hookrunner_shared::{
@@ -32,12 +33,22 @@ fn main() {
         .insert_resource(BindAddress(address))
         .init_resource::<hookrunner_shared::match_state::MatchState>()
         .init_resource::<matches::MatchClock>()
+        .init_resource::<powerups::PickupDirector>()
         .add_systems(Startup, (start, matches::setup))
         .add_systems(PreUpdate, matches::advance)
         .add_observer(configure_link)
         .add_systems(Update, spawn_players)
         .add_observer(log_disconnect)
-        .add_systems(FixedUpdate, (simulate, combat::advance_projectiles).chain())
+        .add_systems(
+            FixedUpdate,
+            (
+                simulate,
+                powerups::collect,
+                powerups::manage,
+                combat::advance_projectiles,
+            )
+                .chain(),
+        )
         .add_systems(
             PostUpdate,
             (combat::publish_projectiles, matches::publish).before(ReplicationSystems::Send),

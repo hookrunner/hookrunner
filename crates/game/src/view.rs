@@ -2,6 +2,7 @@ use bevy::{
     camera::CameraOutputMode,
     core_pipeline::tonemapping::Tonemapping,
     input::mouse::AccumulatedMouseMotion,
+    light::NotShadowCaster,
     prelude::*,
     window::{CursorOptions, PrimaryWindow},
 };
@@ -33,6 +34,7 @@ impl Plugin for ViewPlugin {
                 (
                     attach_visuals,
                     sync_bodies,
+                    sync_shields,
                     follow_camera.in_set(CameraUpdated),
                     update_hud,
                 )
@@ -52,6 +54,8 @@ pub(crate) struct Look {
 }
 #[derive(Component)]
 struct PlayerVisual;
+#[derive(Component)]
+struct ShieldVisual(Entity);
 #[derive(Component)]
 pub(crate) struct PlayerCamera;
 #[derive(Component)]
@@ -139,6 +143,12 @@ fn attach_visuals(
             unlit: true,
             ..default()
         });
+        let shield = materials.add(StandardMaterial {
+            base_color: Color::srgba(0.25, 0.85, 1.0, 0.18),
+            unlit: true,
+            alpha_mode: AlphaMode::Blend,
+            ..default()
+        });
         commands.entity(entity).with_children(|parent| {
             parent.spawn((
                 Mesh3d(meshes.add(Capsule3d::new(
@@ -152,6 +162,17 @@ fn attach_visuals(
                 Mesh3d(meshes.add(Cuboid::new(0.55, 0.18, 0.16))),
                 MeshMaterial3d(visor),
                 Transform::from_xyz(0.0, 1.45, -0.34),
+            ));
+            parent.spawn((
+                ShieldVisual(entity),
+                Mesh3d(meshes.add(Capsule3d::new(
+                    arena::PLAYER_RADIUS + 0.15,
+                    arena::PLAYER_HEIGHT - 2.0 * arena::PLAYER_RADIUS,
+                ))),
+                MeshMaterial3d(shield),
+                Transform::from_xyz(0.0, arena::PLAYER_HEIGHT / 2.0, 0.0),
+                Visibility::Hidden,
+                NotShadowCaster,
             ));
         });
     }
@@ -209,6 +230,22 @@ fn sync_bodies(mut players: Query<(&PlayerState, &mut Transform), With<PlayerVis
     for (state, mut transform) in &mut players {
         transform.translation = state.position;
         transform.rotation = Quat::from_rotation_y(state.yaw);
+    }
+}
+
+fn sync_shields(
+    players: Query<&PlayerState>,
+    mut shields: Query<(&ShieldVisual, &mut Visibility)>,
+) {
+    for (shield, mut visibility) in &mut shields {
+        *visibility = if players
+            .get(shield.0)
+            .is_ok_and(|player| player.shield > 0 && player.death.is_none())
+        {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
     }
 }
 
@@ -299,6 +336,20 @@ fn update_hud(
                 ),
                 Some(*color),
             ));
+            if state.shield > 0 {
+                spans.push((
+                    format!(
+                        "\nShield: {} / {}",
+                        state.shield,
+                        hookrunner_shared::powerups::MAX_SHIELD
+                    ),
+                    None,
+                ));
+            }
+            if state.speed_ticks > 0 {
+                let seconds = (state.speed_ticks as f64 / hookrunner_shared::TICK_HZ).ceil() as u32;
+                spans.push((format!("\nSpeed boost: {seconds}s"), None));
+            }
             if let Some(death) = state.death {
                 if state.match_paused {
                     spans.push((" | Waiting for next match".into(), None));
