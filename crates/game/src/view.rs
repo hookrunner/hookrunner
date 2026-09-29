@@ -350,6 +350,16 @@ fn update_hud(
                 let seconds = (state.speed_ticks as f64 / hookrunner_shared::TICK_HZ).ceil() as u32;
                 spans.push((format!("\nSpeed boost: {seconds}s"), None));
             }
+            if state.strength_ticks > 0 {
+                let seconds =
+                    (state.strength_ticks as f64 / hookrunner_shared::TICK_HZ).ceil() as u32;
+                spans.push((format!("\nDamage x2: {seconds}s"), None));
+            }
+            if state.rapid_fire_ticks > 0 {
+                let seconds =
+                    (state.rapid_fire_ticks as f64 / hookrunner_shared::TICK_HZ).ceil() as u32;
+                spans.push((format!("\nRapid fire: {seconds}s"), None));
+            }
             if let Some(death) = state.death {
                 if state.match_paused {
                     spans.push((" | Waiting for next match".into(), None));

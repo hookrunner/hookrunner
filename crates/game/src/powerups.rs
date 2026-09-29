@@ -18,6 +18,8 @@ struct PickupAssets {
     shield: Handle<StandardMaterial>,
     shield_glow: Handle<StandardMaterial>,
     speed: Handle<StandardMaterial>,
+    strength: Handle<StandardMaterial>,
+    rapid_fire: Handle<StandardMaterial>,
     highlight: Handle<StandardMaterial>,
 }
 
@@ -46,6 +48,8 @@ fn setup(
             ..default()
         }),
         speed: materials.add(material(Color::srgb(1.0, 0.72, 0.18))),
+        strength: materials.add(material(Color::srgb(1.0, 0.28, 0.16))),
+        rapid_fire: materials.add(material(Color::srgb(0.76, 0.35, 1.0))),
         highlight: materials.add(material(Color::srgb(0.96, 0.98, 1.0))),
     });
 }
@@ -89,21 +93,57 @@ fn attach(
                     ));
                 }
                 PickupKind::Speed => {
+                    // A broad, jagged lightning bolt stays recognizable while rotating.
+                    for (start, end) in [
+                        (Vec2::new(0.18, 0.38), Vec2::new(-0.12, 0.04)),
+                        (Vec2::new(-0.12, 0.04), Vec2::new(0.13, -0.06)),
+                        (Vec2::new(0.13, -0.06), Vec2::new(-0.18, -0.38)),
+                    ] {
+                        let delta = end - start;
+                        parent.spawn((
+                            Mesh3d(assets.cube.clone()),
+                            MeshMaterial3d(assets.speed.clone()),
+                            Transform::from_translation(((start + end) * 0.5).extend(0.0))
+                                .with_rotation(Quat::from_rotation_z(-delta.x.atan2(delta.y)))
+                                .with_scale(Vec3::new(0.18, delta.length() + 0.08, 0.12)),
+                            NotShadowCaster,
+                        ));
+                    }
+                }
+                PickupKind::Strength => {
                     parent.spawn((
-                        Mesh3d(assets.cube.clone()),
-                        MeshMaterial3d(assets.speed.clone()),
-                        Transform::from_rotation(Quat::from_rotation_z(
-                            std::f32::consts::FRAC_PI_4,
-                        ))
-                        .with_scale(Vec3::new(0.32, 0.32, 0.32)),
+                        Mesh3d(assets.sphere.clone()),
+                        MeshMaterial3d(assets.strength.clone()),
+                        Transform::from_scale(Vec3::splat(0.24)),
                         NotShadowCaster,
                     ));
-                    parent.spawn((
-                        Mesh3d(assets.cube.clone()),
-                        MeshMaterial3d(assets.highlight.clone()),
-                        Transform::from_scale(Vec3::splat(0.12)),
-                        NotShadowCaster,
-                    ));
+                    for rotation in [0.0, std::f32::consts::FRAC_PI_2] {
+                        parent.spawn((
+                            Mesh3d(assets.cube.clone()),
+                            MeshMaterial3d(assets.highlight.clone()),
+                            Transform::from_rotation(Quat::from_rotation_z(rotation))
+                                .with_scale(Vec3::new(0.52, 0.10, 0.10)),
+                            NotShadowCaster,
+                        ));
+                    }
+                }
+                PickupKind::RapidFire => {
+                    for x in [-0.20, 0.0, 0.20] {
+                        parent.spawn((
+                            Mesh3d(assets.cube.clone()),
+                            MeshMaterial3d(assets.rapid_fire.clone()),
+                            Transform::from_translation(Vec3::new(x, 0.0, 0.0))
+                                .with_scale(Vec3::new(0.12, 0.40, 0.15)),
+                            NotShadowCaster,
+                        ));
+                        parent.spawn((
+                            Mesh3d(assets.sphere.clone()),
+                            MeshMaterial3d(assets.highlight.clone()),
+                            Transform::from_translation(Vec3::new(x, 0.24, 0.0))
+                                .with_scale(Vec3::splat(0.07)),
+                            NotShadowCaster,
+                        ));
+                    }
                 }
             });
     }

@@ -63,11 +63,11 @@ pub fn manage(
             PickupKind::Health,
             PickupKind::Shield,
             PickupKind::Speed,
+            PickupKind::Strength,
+            PickupKind::RapidFire,
             PickupKind::Health,
             PickupKind::Shield,
             PickupKind::Speed,
-            PickupKind::Health,
-            PickupKind::Shield,
         ] {
             spawn_random(&mut commands, kind, &mut occupied, &players);
         }
@@ -79,10 +79,12 @@ pub fn manage(
     director.remaining_ticks = director.remaining_ticks.saturating_sub(1);
     if director.remaining_ticks == 0 {
         if occupied.len() < ACTIVE_PICKUPS {
-            let kind = match rand::random::<u8>() % 3 {
+            let kind = match rand::random::<u8>() % 5 {
                 0 => PickupKind::Health,
                 1 => PickupKind::Shield,
-                _ => PickupKind::Speed,
+                2 => PickupKind::Speed,
+                3 => PickupKind::Strength,
+                _ => PickupKind::RapidFire,
             };
             spawn_random(&mut commands, kind, &mut occupied, &players);
         }

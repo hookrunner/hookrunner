@@ -34,6 +34,8 @@ pub struct PlayerState {
     pub health: crate::health::Health,
     pub shield: u16,
     pub speed_ticks: u16,
+    pub strength_ticks: u16,
+    pub rapid_fire_ticks: u16,
     pub grounded: bool,
     pub match_paused: bool,
     pub death: Option<DeathState>,
@@ -112,6 +114,16 @@ impl Ease for PlayerState {
                     end.speed_ticks
                 } else {
                     start.speed_ticks
+                },
+                strength_ticks: if t >= 1.0 {
+                    end.strength_ticks
+                } else {
+                    start.strength_ticks
+                },
+                rapid_fire_ticks: if t >= 1.0 {
+                    end.rapid_fire_ticks
+                } else {
+                    start.rapid_fire_ticks
                 },
                 // Discrete resource/timer state must not be blended between snapshots.
                 dash: if t >= 1.0 { end.dash } else { start.dash },
