@@ -202,6 +202,8 @@ impl Plugin for ProtocolPlugin {
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<JoinRejected>()
             .add_direction(NetworkDirection::ServerToClient);
+        app.register_message::<crate::weapon::ProjectileHit>()
+            .add_direction(NetworkDirection::ServerToClient);
         app.register_component::<crate::match_state::MatchState>();
         app.register_component::<PlayerName>();
         app.register_component::<crate::player_color::PlayerColor>();
