@@ -2,7 +2,8 @@
 use bevy::{prelude::*, transform::TransformSystems, window::PrimaryWindow};
 use hookrunner_client::Session;
 use hookrunner_shared::{
-    PlayerId, PlayerState, arena, level, player_color::PlayerColor, protocol::PlayerName,
+    PlayerId, PlayerState, arena, health::MAX_HEALTH, level, player_color::PlayerColor,
+    protocol::PlayerName,
 };
 use lightyear::prelude::Predicted;
 use std::collections::HashMap;
@@ -17,6 +18,15 @@ impl Plugin for NameplatesPlugin {
 #[derive(Component)]
 struct Nameplate(Entity);
 
+#[derive(Component)]
+struct HealthText {
+    player: Entity,
+    value: u16,
+}
+
+#[derive(Component)]
+struct HealthBar(Entity);
+
 fn sync(
     mut commands: Commands,
     session: Res<Session>,
@@ -29,7 +39,9 @@ fn sync(
         (Entity, &PlayerName, &PlayerColor, &PlayerState),
         (With<PlayerId>, Without<Predicted>),
     >,
-    mut labels: Query<(Entity, &Nameplate, &mut Node)>,
+    mut labels: Query<(Entity, &Nameplate, &mut Node), Without<HealthBar>>,
+    mut health_texts: Query<(&mut HealthText, &mut Text)>,
+    mut health_bars: Query<(&HealthBar, &mut Node), Without<Nameplate>>,
 ) {
     *elapsed += time.delta_secs();
     let check_walls = *elapsed >= 0.1;
@@ -69,33 +81,93 @@ fn sync(
             };
             if let Some(point) = screen {
                 node.left = px(point.x - 110.0);
-                node.top = px(point.y - 34.0);
+                node.top = px(point.y - 58.0);
+            }
+            for (mut label, mut text) in &mut health_texts {
+                if label.player == entity {
+                    let health = state.health.0.min(MAX_HEALTH);
+                    if label.value != health {
+                        label.value = health;
+                        text.0 = format!("{health} / {MAX_HEALTH}");
+                    }
+                    break;
+                }
+            }
+            for (owner, mut bar) in &mut health_bars {
+                if owner.0 == entity {
+                    let width =
+                        percent(100.0 * state.health.0.min(MAX_HEALTH) as f32 / MAX_HEALTH as f32);
+                    if bar.width != width {
+                        bar.width = width;
+                    }
+                    break;
+                }
             }
         } else {
             let [r, g, b] = color.rgb();
             let position = screen.unwrap_or(Vec2::ZERO);
-            commands.spawn((
-                Nameplate(entity),
-                Text::new(name.0.clone()),
-                TextFont {
-                    font_size: 16.0,
-                    ..default()
-                },
-                TextColor(Color::srgb(r, g, b)),
-                TextLayout::new_with_justify(Justify::Center),
-                Node {
-                    position_type: PositionType::Absolute,
-                    display: if screen.is_some() {
-                        Display::Flex
-                    } else {
-                        Display::None
+            let health = state.health.0.min(MAX_HEALTH);
+            commands
+                .spawn((
+                    Nameplate(entity),
+                    Node {
+                        position_type: PositionType::Absolute,
+                        display: if screen.is_some() {
+                            Display::Flex
+                        } else {
+                            Display::None
+                        },
+                        left: px(position.x - 110.0),
+                        top: px(position.y - 58.0),
+                        width: px(220.0),
+                        flex_direction: FlexDirection::Column,
+                        align_items: AlignItems::Center,
+                        row_gap: px(2.0),
+                        ..default()
                     },
-                    left: px(position.x - 110.0),
-                    top: px(position.y - 34.0),
-                    width: px(220.0),
-                    ..default()
-                },
-            ));
+                ))
+                .with_children(|plate| {
+                    plate.spawn((
+                        Text::new(name.0.clone()),
+                        TextFont {
+                            font_size: 16.0,
+                            ..default()
+                        },
+                        TextColor(Color::srgb(r, g, b)),
+                    ));
+                    plate
+                        .spawn((
+                            Node {
+                                width: px(96.0),
+                                height: px(6.0),
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgba(0.02, 0.03, 0.04, 0.85)),
+                        ))
+                        .with_children(|track| {
+                            track.spawn((
+                                HealthBar(entity),
+                                Node {
+                                    width: percent(100.0 * health as f32 / MAX_HEALTH as f32),
+                                    height: percent(100.0),
+                                    ..default()
+                                },
+                                BackgroundColor(Color::srgb(r, g, b)),
+                            ));
+                        });
+                    plate.spawn((
+                        HealthText {
+                            player: entity,
+                            value: health,
+                        },
+                        Text::new(format!("{health} / {MAX_HEALTH}")),
+                        TextFont {
+                            font_size: 12.0,
+                            ..default()
+                        },
+                        TextColor(Color::WHITE),
+                    ));
+                });
         }
     }
     visibility.retain(|entity, _| players.contains(*entity));
