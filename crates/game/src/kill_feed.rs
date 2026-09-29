@@ -34,7 +34,7 @@ fn present(
     mut commands: Commands,
     session: Res<Session>,
     rounds: Query<Ref<MatchState>>,
-    text: Single<Entity, With<KillFeed>>,
+    mut text: Single<(Entity, &mut Text, &mut Node), With<KillFeed>>,
     mut previous_spans: Local<Vec<(String, Option<PlayerColor>)>>,
 ) {
     if !session.is_changed() && !rounds.iter().any(|round| round.is_changed()) {
@@ -58,8 +58,16 @@ fn present(
         }
     }
     if *previous_spans != spans {
-        commands.entity(*text).despawn_related::<Children>();
-        commands.entity(*text).with_children(|parent| {
+        // Removing the last child also removes Children, which does not trigger
+        // Bevy's Changed<Children> text rebuild. Mark the root text dirty too.
+        text.1.0.clear();
+        text.2.display = if spans.is_empty() {
+            Display::None
+        } else {
+            Display::Flex
+        };
+        commands.entity(text.0).despawn_related::<Children>();
+        commands.entity(text.0).with_children(|parent| {
             for (segment, color) in &spans {
                 let mut span = parent.spawn(TextSpan::new(segment.clone()));
                 if let Some(color) = color {
