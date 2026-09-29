@@ -361,7 +361,8 @@ fn bolt_visual_radius(bolt: &Projectile) -> f32 {
 }
 
 fn bolt_trail_width(radius: f32) -> f32 {
-    0.018 + radius * 0.6
+    // The trail is an afterimage; only the leading sphere participates in hits.
+    0.024 + radius * 0.75
 }
 
 fn resize_bolt_parts(
