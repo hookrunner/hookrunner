@@ -16,11 +16,11 @@ use lightyear::prelude::{input::native::ActionState, *};
 const VIEW_LAYER: usize = 1;
 const REST_POSITION: Vec3 = Vec3::new(0.23, -0.20, -0.46);
 const MUZZLE_CLEARANCE: f32 = 0.015;
-const FLASH_HALF_LENGTH: f32 = 0.055;
+const FLASH_HALF_LENGTH: f32 = 0.035;
 const IMPACT_RADIUS: f32 = 0.32;
-const BOLT_START_RADIUS: f32 = 0.02;
-const BOLT_MAX_RADIUS: f32 = 0.16;
-const BOLT_GROW_DISTANCE: f32 = 22.0;
+const BOLT_START_RADIUS: f32 = 0.012;
+const BOLT_MAX_RADIUS: f32 = 0.12;
+const BOLT_GROW_DISTANCE: f32 = 12.0;
 
 pub struct WeaponPlugin;
 impl Plugin for WeaponPlugin {
@@ -74,7 +74,10 @@ struct WeaponCamera;
 #[derive(Component)]
 struct BoltVisual;
 #[derive(Component)]
-struct BoltHead(f32);
+enum BoltPart {
+    Head(f32),
+    Trail(f32),
+}
 #[derive(Component)]
 struct LocalBolt {
     bolt: Projectile,
@@ -190,7 +193,7 @@ fn prepare_view_model(
                 MeshMaterial3d(assets.core.clone()),
                 // The sphere's rear edge must also clear the barrel lip.
                 Transform::from_xyz(0., 0., -(MUZZLE_CLEARANCE + FLASH_HALF_LENGTH))
-                    .with_scale(Vec3::new(0.03, 0.03, FLASH_HALF_LENGTH)),
+                    .with_scale(Vec3::new(0.014, 0.014, FLASH_HALF_LENGTH)),
                 Visibility::Hidden,
                 RenderLayers::layer(VIEW_LAYER),
                 NotShadowCaster,
@@ -201,12 +204,14 @@ fn prepare_view_model(
 }
 
 fn beam_children(parent: &mut ChildSpawnerCommands, assets: &WeaponAssets, length: f32) {
-    for (width, material) in [
-        (0.04, &assets.glow),
-        (0.02, &assets.cyan),
-        (0.008, &assets.core),
+    for (scale, material) in [
+        (1.0, &assets.glow),
+        (0.5, &assets.cyan),
+        (0.2, &assets.core),
     ] {
+        let width = bolt_trail_width(BOLT_START_RADIUS) * scale;
         parent.spawn((
+            BoltPart::Trail(scale),
             Mesh3d(assets.beam.clone()),
             MeshMaterial3d(material.clone()),
             Transform::from_scale(Vec3::new(width, width, 1.)),
@@ -216,7 +221,7 @@ fn beam_children(parent: &mut ChildSpawnerCommands, assets: &WeaponAssets, lengt
     for (scale, material) in [(1.0, &assets.glow), (0.45, &assets.core)] {
         let radius = BOLT_START_RADIUS * scale;
         parent.spawn((
-            BoltHead(scale),
+            BoltPart::Head(scale),
             Mesh3d(assets.spark.clone()),
             MeshMaterial3d(material.clone()),
             Transform::from_xyz(0.0, 0.0, -0.5).with_scale(Vec3::new(
@@ -287,7 +292,7 @@ fn detect_shots(
     }
     feedback.pending_shot = true;
     feedback.recoil = 1.;
-    feedback.flash = 0.07;
+    feedback.flash = 0.032;
 }
 
 fn local_shots(
@@ -351,8 +356,35 @@ fn bolt_length(bolt: &Projectile) -> f32 {
 
 fn bolt_visual_radius(bolt: &Projectile) -> f32 {
     let progress = (bolt.position.distance(bolt.origin) / BOLT_GROW_DISTANCE).clamp(0.0, 1.0);
-    let eased = progress * progress * (3.0 - 2.0 * progress);
+    let eased = progress * (2.0 - progress);
     BOLT_START_RADIUS + (BOLT_MAX_RADIUS - BOLT_START_RADIUS) * eased
+}
+
+fn bolt_trail_width(radius: f32) -> f32 {
+    0.018 + radius * 0.6
+}
+
+fn resize_bolt_parts(
+    children: &Children,
+    parts: &mut Query<(&BoltPart, &mut Transform), (Without<LocalBolt>, Without<BoltVisual>)>,
+    radius: f32,
+    length: f32,
+) {
+    for child in children {
+        if let Ok((part, mut transform)) = parts.get_mut(*child) {
+            match part {
+                BoltPart::Head(scale) => {
+                    let radius = radius * scale;
+                    transform.scale = Vec3::new(radius, radius, radius / length);
+                }
+                BoltPart::Trail(scale) => {
+                    let width = bolt_trail_width(radius) * scale;
+                    transform.scale.x = width;
+                    transform.scale.y = width;
+                }
+            }
+        }
+    }
 }
 
 fn bolt_transform(bolt: &Projectile) -> Transform {
@@ -366,8 +398,8 @@ fn advance_local_bolts(
     mut commands: Commands,
     time: Res<Time>,
     assets: Res<WeaponAssets>,
-    mut bolts: Query<(Entity, &mut LocalBolt, &mut Transform, &Children), Without<BoltHead>>,
-    mut heads: Query<(&BoltHead, &mut Transform), (Without<LocalBolt>, Without<BoltVisual>)>,
+    mut bolts: Query<(Entity, &mut LocalBolt, &mut Transform, &Children), Without<BoltPart>>,
+    mut parts: Query<(&BoltPart, &mut Transform), (Without<LocalBolt>, Without<BoltVisual>)>,
 ) {
     for (entity, mut local, mut transform, children) in &mut bolts {
         let delta = local.bolt.direction * weapon::PROJECTILE_SPEED * time.delta_secs();
@@ -398,12 +430,7 @@ fn advance_local_bolts(
         *transform = bolt_transform(&visual);
         let length = bolt_length(&visual);
         let radius = bolt_visual_radius(&local.bolt);
-        for child in children {
-            if let Ok((head, mut head_transform)) = heads.get_mut(*child) {
-                let radius = radius * head.0;
-                head_transform.scale = Vec3::new(radius, radius, radius / length);
-            }
-        }
+        resize_bolt_parts(children, &mut parts, radius, length);
     }
 }
 
@@ -429,9 +456,9 @@ fn sync_bolts(
     feedback: Res<Feedback>,
     mut bolts: Query<
         (&Projectile, &mut Transform, &mut Visibility, &Children),
-        (With<BoltVisual>, Without<BoltHead>),
+        (With<BoltVisual>, Without<BoltPart>),
     >,
-    mut heads: Query<(&BoltHead, &mut Transform), (Without<LocalBolt>, Without<BoltVisual>)>,
+    mut parts: Query<(&BoltPart, &mut Transform), (Without<LocalBolt>, Without<BoltVisual>)>,
 ) {
     for (bolt, mut transform, mut visibility, children) in &mut bolts {
         *visibility = if feedback.player == Some(bolt.owner) {
@@ -442,12 +469,7 @@ fn sync_bolts(
         *transform = bolt_transform(bolt);
         let length = bolt_length(bolt);
         let radius = bolt_visual_radius(bolt);
-        for child in children {
-            if let Ok((head, mut head_transform)) = heads.get_mut(*child) {
-                let radius = radius * head.0;
-                head_transform.scale = Vec3::new(radius, radius, radius / length);
-            }
-        }
+        resize_bolt_parts(children, &mut parts, radius, length);
     }
 }
 
