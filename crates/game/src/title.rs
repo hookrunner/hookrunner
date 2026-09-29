@@ -5,6 +5,7 @@ use bevy::{
 };
 use hookrunner_client::{JoinGame, Session, SessionPhase};
 use hookrunner_shared::{
+    PlayerId,
     nickname::{self, MAX_NICKNAME_CHARS},
     player_color::{PALETTE, PlayerColor},
 };
@@ -43,6 +44,8 @@ struct PlayButton;
 struct PlayLabel;
 #[derive(Component)]
 struct ColorChoice(u8);
+#[derive(Component)]
+struct OccupiedMark(u8);
 
 fn setup(mut commands: Commands) {
     commands
@@ -127,6 +130,8 @@ fn setup(mut commands: Commands) {
                                     width: px(38),
                                     height: px(38),
                                     border: UiRect::all(px(3)),
+                                    align_items: AlignItems::Center,
+                                    justify_content: JustifyContent::Center,
                                     ..default()
                                 },
                                 BackgroundColor(Color::srgb(r, g, b)),
@@ -135,7 +140,18 @@ fn setup(mut commands: Commands) {
                                 } else {
                                     Color::NONE
                                 }),
-                            ));
+                            ))
+                            .with_children(|swatch| {
+                                swatch.spawn((
+                                    OccupiedMark(index as u8),
+                                    Text::new(""),
+                                    TextFont {
+                                        font_size: 20.0,
+                                        ..default()
+                                    },
+                                    TextColor(Color::WHITE),
+                                ));
+                            });
                         }
                     });
                 panel
@@ -187,15 +203,25 @@ fn edit(
     keys: Res<ButtonInput<KeyCode>>,
     buttons: Query<&Interaction, (Changed<Interaction>, With<PlayButton>)>,
     choices: Query<(&Interaction, &ColorChoice), Changed<Interaction>>,
+    colors: Query<&PlayerColor, With<PlayerId>>,
 ) {
     if session.phase != SessionPhase::Title || loading.percent != 100 {
         keyboard.clear();
         ime.clear();
         return;
     }
+    let occupied = occupied_colors(&colors);
     for (interaction, choice) in &choices {
-        if *interaction == Interaction::Pressed {
+        if *interaction == Interaction::Pressed && occupied & (1 << choice.0) == 0 {
             draft.color = choice.0;
+            draft.error = None;
+            session.error = None;
+        }
+    }
+    if session.lobby_ready && occupied & (1 << draft.color) != 0 {
+        if let Some(index) = (0..PALETTE.len()).find(|index| occupied & (1 << index) == 0) {
+            draft.color = index as u8;
+            session.error = None;
         }
     }
     let mut committed = false;
@@ -248,7 +274,11 @@ fn edit(
             _ => (),
         }
     }
-    if submit {
+    if submit && session.lobby_ready {
+        if occupied == (1 << PALETTE.len()) - 1 {
+            draft.error = Some("All colors are taken. Try again later.".into());
+            return;
+        }
         match nickname::validate(&draft.value) {
             Ok(nickname) => {
                 draft.value = nickname.clone();
@@ -261,6 +291,10 @@ fn edit(
             Err(error) => draft.error = Some(error.into()),
         }
     }
+}
+
+fn occupied_colors(colors: &Query<&PlayerColor, With<PlayerId>>) -> u16 {
+    colors.iter().fold(0, |mask, color| mask | (1 << color.0))
 }
 
 fn insert_text(draft: &mut NicknameDraft, text: &str) {
@@ -282,27 +316,51 @@ fn present(
     draft: Res<NicknameDraft>,
     mut screen: Single<&mut Node, With<TitleScreen>>,
     mut error_node: Single<&mut Node, (With<StatusText>, Without<TitleScreen>)>,
-    mut swatches: Query<(&ColorChoice, &mut BorderColor)>,
+    mut swatches: Query<(&ColorChoice, &mut BorderColor, &mut BackgroundColor)>,
     mut texts: Query<(
         &mut Text,
         Has<NicknameText>,
         Has<StatusText>,
         Has<PlayLabel>,
+        Option<&OccupiedMark>,
     )>,
+    colors: Query<&PlayerColor, With<PlayerId>>,
     mut windows: Query<&mut Window>,
     mut previous_playing: Local<Option<bool>>,
+    mut previous_occupied: Local<u16>,
 ) {
-    if !session.is_changed() && !draft.is_changed() && previous_playing.is_some() {
+    let occupied = occupied_colors(&colors);
+    if !session.is_changed()
+        && !draft.is_changed()
+        && *previous_occupied == occupied
+        && previous_playing.is_some()
+    {
         return;
     }
-    error_node.display = if draft.error.is_some() || session.error.is_some() {
+    *previous_occupied = occupied;
+    error_node.display = if draft.error.is_some()
+        || session.error.is_some()
+        || (!session.lobby_ready && session.phase == SessionPhase::Title)
+        || occupied == (1 << PALETTE.len()) - 1
+    {
         Display::Flex
     } else {
         Display::None
     };
-    for (choice, mut border) in &mut swatches {
+    for (choice, mut border, mut background) in &mut swatches {
+        let [r, g, b] = PlayerColor(choice.0).rgb();
+        let taken = occupied & (1 << choice.0) != 0;
         let selected = choice.0 == draft.color;
-        *border = BorderColor::all(if selected { Color::WHITE } else { Color::NONE });
+        *border = BorderColor::all(if selected && !taken {
+            Color::WHITE
+        } else {
+            Color::NONE
+        });
+        *background = BackgroundColor(if taken {
+            Color::srgb(r * 0.35, g * 0.35, b * 0.35)
+        } else {
+            Color::srgb(r, g, b)
+        });
     }
     let playing = session.is_playing();
     screen.display = if playing {
@@ -317,7 +375,7 @@ fn present(
         }
         *previous_playing = Some(playing);
     }
-    for (mut text, nickname, status, label) in &mut texts {
+    for (mut text, nickname, status, label, mark) in &mut texts {
         if nickname {
             text.0 = if draft.value.is_empty() {
                 "Nickname".into()
@@ -332,12 +390,27 @@ fn present(
                 .as_ref()
                 .or(session.error.as_ref())
                 .cloned()
-                .unwrap_or_default();
+                .unwrap_or_else(|| {
+                    if !session.lobby_ready && session.phase == SessionPhase::Title {
+                        "Connecting to server...".into()
+                    } else if occupied == (1 << PALETTE.len()) - 1 {
+                        "All colors are taken. Try again later.".into()
+                    } else {
+                        String::new()
+                    }
+                });
         } else if label {
-            text.0 = if session.phase == SessionPhase::Connecting {
+            text.0 = if session.phase == SessionPhase::Connecting || !session.lobby_ready {
                 "Connecting..."
             } else {
                 "Play"
+            }
+            .into();
+        } else if let Some(mark) = mark {
+            text.0 = if occupied & (1 << mark.0) != 0 {
+                "X"
+            } else {
+                ""
             }
             .into();
         }

@@ -26,8 +26,9 @@ impl Plugin for GameNetworkingPlugin {
         .add_plugins(ProtocolPlugin)
         .init_resource::<NetworkStats>()
         .init_resource::<Session>()
-        .add_observer(connect)
-        .add_systems(Update, (send_join, update_session).chain())
+        .add_observer(join_game)
+        .add_systems(Startup, start_lobby)
+        .add_systems(Update, (send_join, update_session, maintain_lobby).chain())
         .add_systems(PreUpdate, attach_input)
         .add_systems(FixedUpdate, predict)
         .add_systems(Update, update_network_stats);
@@ -48,8 +49,11 @@ pub struct Session {
     pub nickname: String,
     pub color: u8,
     pub error: Option<String>,
+    pub lobby_ready: bool,
     connection: Option<Entity>,
+    join_sent: bool,
     elapsed: f32,
+    retry_elapsed: f32,
 }
 
 impl Session {
@@ -64,7 +68,11 @@ pub struct JoinGame {
     pub color: u8,
 }
 
-fn connect(
+fn start_lobby(mut commands: Commands, url: Res<ServerUrl>, mut session: ResMut<Session>) {
+    open_connection(&mut commands, &url, &mut session);
+}
+
+fn join_game(
     event: On<JoinGame>,
     mut commands: Commands,
     url: Res<ServerUrl>,
@@ -88,7 +96,14 @@ fn connect(
     session.color = event.color;
     session.error = None;
     session.elapsed = 0.0;
+    session.join_sent = false;
     session.phase = SessionPhase::Connecting;
+    if session.connection.is_none() {
+        open_connection(&mut commands, &url, &mut session);
+    }
+}
+
+fn open_connection(commands: &mut Commands, url: &ServerUrl, session: &mut Session) {
     let mut endpoint = url::Url::parse(&url.0).expect("game server URL must be valid");
     endpoint
         .query_pairs_mut()
@@ -127,18 +142,27 @@ fn connect(
         .id();
     commands.entity(entity).insert(Connecting);
     session.connection = Some(entity);
+    session.lobby_ready = false;
+    session.retry_elapsed = 0.0;
     commands.trigger(Connect { entity });
 }
 
 fn send_join(
-    session: Res<Session>,
-    mut connections: Query<&mut MessageSender<JoinRequest>, (With<Client>, Added<Connected>)>,
+    mut session: ResMut<Session>,
+    mut connections: Query<&mut MessageSender<JoinRequest>, (With<Client>, With<Connected>)>,
 ) {
-    for mut sender in &mut connections {
+    if session.phase != SessionPhase::Connecting || session.join_sent {
+        return;
+    }
+    if let Some(mut sender) = session
+        .connection
+        .and_then(|entity| connections.get_mut(entity).ok())
+    {
         sender.send::<LobbyChannel>(JoinRequest {
             nickname: session.nickname.clone(),
             color: session.color,
         });
+        session.join_sent = true;
     }
 }
 
@@ -151,6 +175,7 @@ pub fn update_session(
         With<Client>,
     >,
     players: Query<(&PlayerName, &hookrunner_shared::player_color::PlayerColor), With<Predicted>>,
+    rounds: Query<Entity, With<hookrunner_shared::match_state::MatchState>>,
     replicas: Query<
         Entity,
         Or<(
@@ -163,18 +188,27 @@ pub fn update_session(
     let Some(entity) = session.connection else {
         return;
     };
+    let mut rejection = None;
     let mut failure = None;
     if let Ok((disconnected, mut replies)) = connections.get_mut(entity) {
         for reply in replies.receive() {
-            failure = Some(reply.reason);
+            rejection = Some(reply.reason);
         }
-        if disconnected.is_some_and(|state| state.reason.is_some() || session.is_playing())
-            && failure.is_none()
-        {
+        if disconnected.is_some() {
             failure = Some("Disconnected. Check the server and try again.".into());
         }
     } else {
         failure = Some("Connection lost. Please try again.".into());
+    }
+    let lobby_ready = failure.is_none() && !rounds.is_empty();
+    if session.lobby_ready != lobby_ready {
+        session.lobby_ready = lobby_ready;
+    }
+    if let Some(reason) = rejection {
+        session.phase = SessionPhase::Title;
+        session.join_sent = false;
+        session.elapsed = 0.0;
+        session.error = Some(reason);
     }
     if session.phase == SessionPhase::Connecting {
         session.elapsed += time.delta_secs();
@@ -187,6 +221,7 @@ pub fn update_session(
         }
     }
     if let Some(error) = failure {
+        let show_error = session.phase != SessionPhase::Title;
         commands.trigger(Disconnect { entity });
         commands.entity(entity).try_despawn();
         for replica in &replicas {
@@ -194,7 +229,26 @@ pub fn update_session(
         }
         session.connection = None;
         session.phase = SessionPhase::Title;
-        session.error = Some(error);
+        session.join_sent = false;
+        session.lobby_ready = false;
+        if show_error {
+            session.error = Some(error);
+        }
+    }
+}
+
+fn maintain_lobby(
+    mut commands: Commands,
+    url: Res<ServerUrl>,
+    time: Res<Time<Real>>,
+    mut session: ResMut<Session>,
+) {
+    if session.connection.is_some() || session.phase != SessionPhase::Title {
+        return;
+    }
+    session.retry_elapsed += time.delta_secs();
+    if session.retry_elapsed >= 2.0 {
+        open_connection(&mut commands, &url, &mut session);
     }
 }
 
