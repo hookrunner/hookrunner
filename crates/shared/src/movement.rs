@@ -56,6 +56,8 @@ pub fn kill(state: &mut PlayerState, pitch: f32) {
     state.dash.remaining_ticks = 0;
     state.shield = 0;
     state.speed_ticks = 0;
+    state.strength_ticks = 0;
+    state.rapid_fire_ticks = 0;
 }
 
 pub fn respawn(state: &mut PlayerState, input: &PlayerInput) {
@@ -87,6 +89,8 @@ pub fn respawn(state: &mut PlayerState, input: &PlayerInput) {
 fn step_in_world(world: &CollisionWorld, state: &mut PlayerState, input: &PlayerInput) {
     let dt = TICK_DURATION.as_secs_f32();
     state.speed_ticks = state.speed_ticks.saturating_sub(1);
+    state.strength_ticks = state.strength_ticks.saturating_sub(1);
+    state.rapid_fire_ticks = state.rapid_fire_ticks.saturating_sub(1);
     state.yaw = input.yaw_radians() + state.view_yaw_offset;
     let grounded = state.vertical_velocity <= 0.0 && world.is_grounded(state.position);
     if grounded {
