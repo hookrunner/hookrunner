@@ -128,3 +128,6 @@ pub fn pointer_locked(cursor: &CursorOptions) -> bool {
 pub fn finished_loading() {
     info!("Stormkeep loaded.");
 }
+
+// The shared Bevy loading screen presents progress on native platforms.
+pub fn loading_progress(_percent: u8, _error: Option<&str>) {}

@@ -1,5 +1,6 @@
 mod build_check;
 mod combat;
+mod loading;
 
 use bevy::{app::ScheduleRunnerPlugin, prelude::*};
 use hookrunner_shared::{
@@ -23,6 +24,7 @@ fn main() {
             tick_duration: TICK_DURATION,
         })
         .add_plugins(ProtocolPlugin)
+        .add_plugins(loading::LoadingPlugin)
         .insert_resource(BindAddress(address))
         .add_systems(Startup, start)
         .add_observer(configure_link)
@@ -40,7 +42,7 @@ fn main() {
 struct BindAddress(SocketAddr);
 
 fn start(mut commands: Commands, address: Res<BindAddress>) {
-    let _ = hookrunner_shared::level::world();
+    loading::prepare_world(&mut commands);
     let config = lightyear::websocket::server::ServerConfig::builder()
         .with_bind_address(address.0)
         .with_no_encryption()
@@ -52,6 +54,10 @@ fn start(mut commands: Commands, address: Res<BindAddress>) {
             WebSocketServerIo { config },
         ))
         .id();
+    info!(
+        "Loading game [3/4, 75%]: opening WebSocket listener at {}",
+        address.0
+    );
     commands.trigger(Start { entity });
     info!(
         "Hookrunner: ws://{} ({TICK_HZ:.0} Hz simulation, {TICK_HZ:.0} Hz snapshots)",

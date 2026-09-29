@@ -1,4 +1,5 @@
 mod baked_material;
+mod loading;
 mod map;
 mod mipmaps;
 mod view;
@@ -20,6 +21,7 @@ fn main() -> AppExit {
     app.insert_resource(WinitSettings::continuous())
         .add_plugins((
             GameNetworkingPlugin,
+            loading::LoadingPlugin,
             MaterialPlugin::<baked_material::BakedMaterial>::default(),
             view::ViewPlugin,
             weapon::WeaponPlugin,
