@@ -9,7 +9,7 @@ use bevy::{
 };
 use hookrunner_shared::{
     PlayerId, PlayerInput, PlayerState, level,
-    weapon::{self, Projectile},
+    weapon::{self, Projectile, ProjectileHit},
 };
 use lightyear::prelude::{input::native::ActionState, *};
 
@@ -17,6 +17,7 @@ const VIEW_LAYER: usize = 1;
 const REST_POSITION: Vec3 = Vec3::new(0.23, -0.20, -0.46);
 const MUZZLE_CLEARANCE: f32 = 0.015;
 const FLASH_HALF_LENGTH: f32 = 0.055;
+const IMPACT_RADIUS: f32 = 0.32;
 
 pub struct WeaponPlugin;
 impl Plugin for WeaponPlugin {
@@ -32,6 +33,7 @@ impl Plugin for WeaponPlugin {
                     attach_bolts,
                     advance_local_bolts,
                     sync_bolts,
+                    confirmed_hits,
                     fade_impacts,
                 )
                     .chain()
@@ -74,6 +76,7 @@ struct BoltHead(f32);
 struct LocalBolt {
     bolt: Projectile,
     age: f32,
+    muzzle: Vec3,
 }
 #[derive(Component)]
 struct ImpactFlash {
@@ -207,12 +210,10 @@ fn beam_children(parent: &mut ChildSpawnerCommands, assets: &WeaponAssets, lengt
             NotShadowCaster,
         ));
     }
-    for (radius, material) in [
-        (weapon::PROJECTILE_RADIUS, &assets.glow),
-        (weapon::PROJECTILE_RADIUS * 0.28, &assets.core),
-    ] {
+    for (scale, material) in [(1.0, &assets.glow), (0.28, &assets.core)] {
+        let radius = weapon::PROJECTILE_START_RADIUS * scale;
         parent.spawn((
-            BoltHead(radius),
+            BoltHead(scale),
             Mesh3d(assets.spark.clone()),
             MeshMaterial3d(material.clone()),
             Transform::from_xyz(0.0, 0.0, -0.5).with_scale(Vec3::new(
@@ -291,7 +292,6 @@ fn local_shots(
     assets: Res<WeaponAssets>,
     feedback: Res<Feedback>,
     muzzle: MuzzleView,
-    targets: Query<(&PlayerId, &PlayerState)>,
     players: Query<(&PlayerId, &PlayerState, &ActionState<PlayerInput>), With<Predicted>>,
 ) {
     if !feedback.pending_shot {
@@ -301,49 +301,24 @@ fn local_shots(
         return;
     };
     // animate_weapon ran first, so the socket matches the pose drawn this frame.
-    let Some((muzzle, eye, direction)) = muzzle.shot_geometry() else {
+    let Some((muzzle, _, _)) = muzzle.shot_geometry() else {
         return;
     };
-    let mut bolt = Projectile::from_shot(id.0, state, &input.0);
-    bolt.origin = eye;
-    bolt.position = eye;
-    bolt.direction = direction;
-    // Pick the reticle target first, then send the visible bolt from the barrel
-    // to that point. Its tail can never extend backwards into the gun.
-    let range = weapon::PROJECTILE_SPEED * 2.;
-    let fraction = weapon::trace(
-        level::world(),
-        &bolt,
-        direction * range,
-        targets.iter().map(|(id, state)| (id.0, state)),
-    )
-    .map_or(1., |(fraction, _)| fraction);
-    let target = eye + direction * range * fraction;
-    if (target - muzzle).dot(direction) <= 0. {
-        spawn_impact(&mut commands, &assets, target, -direction);
-        return;
-    }
-    // The view model can overlap walls. Never let that launch a cosmetic bolt
-    // through a wall that is between the player and the visible muzzle.
-    if let Some(fraction) =
-        level::world().sweep_sphere(eye, muzzle - eye, weapon::PROJECTILE_RADIUS)
-    {
-        spawn_impact(
-            &mut commands,
-            &assets,
-            eye + (muzzle - eye) * fraction,
-            -direction,
-        );
-        return;
-    }
-    bolt.origin = muzzle;
-    bolt.position = muzzle;
-    bolt.direction = (target - muzzle).normalize_or_zero();
-    let length = bolt_length(&bolt);
-    let transform = bolt_transform(&bolt);
+    let bolt = Projectile::from_shot(id.0, state, &input.0);
+    let visual = Projectile {
+        origin: muzzle,
+        position: muzzle,
+        ..bolt.clone()
+    };
+    let length = bolt_length(&visual);
+    let transform = bolt_transform(&visual);
     commands
         .spawn((
-            LocalBolt { bolt, age: 0. },
+            LocalBolt {
+                bolt,
+                age: 0.,
+                muzzle,
+            },
             transform,
             Visibility::Inherited,
         ))
@@ -384,21 +359,18 @@ fn advance_local_bolts(
     assets: Res<WeaponAssets>,
     mut bolts: Query<(Entity, &mut LocalBolt, &mut Transform, &Children), Without<BoltHead>>,
     mut heads: Query<(&BoltHead, &mut Transform), (Without<LocalBolt>, Without<BoltVisual>)>,
-    players: Query<(&PlayerId, &PlayerState)>,
 ) {
     for (entity, mut local, mut transform, children) in &mut bolts {
         let delta = local.bolt.direction * weapon::PROJECTILE_SPEED * time.delta_secs();
-        if let Some((fraction, _)) = weapon::trace(
-            level::world(),
-            &local.bolt,
-            delta,
-            players.iter().map(|(id, state)| (id.0, state)),
-        ) {
+        let radius = local.bolt.radius_at(local.bolt.position + delta);
+        if let Some(fraction) = level::world().sweep_sphere(local.bolt.position, delta, radius) {
+            let position = local.bolt.position + delta * fraction;
             spawn_impact(
                 &mut commands,
                 &assets,
-                local.bolt.position + delta * fraction,
+                position,
                 -local.bolt.direction,
+                local.bolt.radius_at(position),
             );
             commands.entity(entity).despawn();
             continue;
@@ -409,12 +381,37 @@ fn advance_local_bolts(
             commands.entity(entity).despawn();
             continue;
         }
-        *transform = bolt_transform(&local.bolt);
-        let length = bolt_length(&local.bolt);
+        let visual = Projectile {
+            origin: local.muzzle,
+            direction: (local.bolt.position - local.muzzle).normalize_or(local.bolt.direction),
+            ..local.bolt.clone()
+        };
+        *transform = bolt_transform(&visual);
+        let length = bolt_length(&visual);
+        let radius = local.bolt.radius_at(local.bolt.position);
         for child in children {
             if let Ok((head, mut head_transform)) = heads.get_mut(*child) {
-                head_transform.scale.z = head.0 / length;
+                let radius = radius * head.0;
+                head_transform.scale = Vec3::new(radius, radius, radius / length);
             }
+        }
+    }
+}
+
+fn confirmed_hits(
+    mut commands: Commands,
+    assets: Res<WeaponAssets>,
+    mut connections: Query<&mut MessageReceiver<ProjectileHit>, (With<Client>, With<Connected>)>,
+    local_bolts: Query<(Entity, &LocalBolt)>,
+) {
+    for mut connection in &mut connections {
+        for hit in connection.receive() {
+            for (entity, local) in &local_bolts {
+                if local.bolt.owner == hit.owner && local.bolt.shot == hit.shot {
+                    commands.entity(entity).despawn();
+                }
+            }
+            spawn_impact(&mut commands, &assets, hit.position, hit.normal, hit.radius);
         }
     }
 }
@@ -435,9 +432,11 @@ fn sync_bolts(
         };
         *transform = bolt_transform(bolt);
         let length = bolt_length(bolt);
+        let radius = bolt.radius_at(bolt.position);
         for child in children {
             if let Ok((head, mut head_transform)) = heads.get_mut(*child) {
-                head_transform.scale.z = head.0 / length;
+                let radius = radius * head.0;
+                head_transform.scale = Vec3::new(radius, radius, radius / length);
             }
         }
     }
@@ -481,17 +480,23 @@ enum SplashElement {
     Ray(Vec3),
 }
 
-fn spawn_impact(commands: &mut Commands, assets: &WeaponAssets, position: Vec3, normal: Vec3) {
+fn spawn_impact(
+    commands: &mut Commands,
+    assets: &WeaponAssets,
+    position: Vec3,
+    normal: Vec3,
+    radius: f32,
+) {
     let rotation = Quat::from_rotation_arc(Vec3::Z, normal);
     commands
         .spawn((
             ImpactFlash { age: 0. },
-            Transform::from_translation(position - normal * (weapon::PROJECTILE_RADIUS - 0.06)),
+            Transform::from_translation(position - normal * (radius - 0.06).max(0.0)),
             Visibility::Inherited,
         ))
         .with_children(|parent| {
             for (element, material, size) in [
-                (SplashElement::Halo, &assets.glow, weapon::PROJECTILE_RADIUS),
+                (SplashElement::Halo, &assets.glow, IMPACT_RADIUS),
                 (SplashElement::Core, &assets.core, 0.18),
             ] {
                 parent.spawn((
@@ -537,8 +542,7 @@ fn fade_impacts(
             match element {
                 SplashElement::Core => transform.scale = Vec3::splat(0.18 * fade * fade),
                 SplashElement::Halo => {
-                    transform.scale =
-                        Vec3::splat((weapon::PROJECTILE_RADIUS + progress * 0.6) * fade.sqrt())
+                    transform.scale = Vec3::splat((IMPACT_RADIUS + progress * 0.6) * fade.sqrt())
                 }
                 SplashElement::Ray(direction) => {
                     *transform = Transform::from_translation(*direction * progress * 1.15)
