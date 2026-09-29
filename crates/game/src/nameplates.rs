@@ -28,7 +28,7 @@ struct HealthText {
 struct HealthBar(Entity);
 
 fn plate_scale(distance: f32) -> f32 {
-    (10.0 / distance.max(1.0)).clamp(0.32, 1.4)
+    (10.0 / distance.max(f32::EPSILON)).max(0.32)
 }
 
 fn plate_top(anchor_y: f32, scale: f32) -> f32 {
