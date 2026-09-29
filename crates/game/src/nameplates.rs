@@ -27,6 +27,15 @@ struct HealthText {
 #[derive(Component)]
 struct HealthBar(Entity);
 
+fn plate_scale(distance: f32) -> f32 {
+    (10.0 / distance.max(1.0)).clamp(0.32, 1.4)
+}
+
+fn plate_top(anchor_y: f32, scale: f32) -> f32 {
+    // UiTransform scales around the label center. Keep its lower edge near the head.
+    anchor_y - 19.0 * (1.0 + scale) - 18.0 * scale
+}
+
 fn sync(
     mut commands: Commands,
     session: Res<Session>,
@@ -39,7 +48,7 @@ fn sync(
         (Entity, &PlayerName, &PlayerColor, &PlayerState),
         (With<PlayerId>, Without<Predicted>),
     >,
-    mut labels: Query<(Entity, &Nameplate, &mut Node), Without<HealthBar>>,
+    mut labels: Query<(Entity, &Nameplate, &mut Node, &mut UiTransform), Without<HealthBar>>,
     mut health_texts: Query<(&mut HealthText, &mut Text)>,
     mut health_bars: Query<(&HealthBar, &mut Node), Without<Nameplate>>,
 ) {
@@ -51,8 +60,9 @@ fn sync(
     for (entity, name, color, state) in &players {
         let world = state.position + Vec3::Y * (arena::PLAYER_HEIGHT + 0.35);
         let line = world - camera.1.translation();
-        let visible =
-            session.is_playing() && state.death.is_none() && line.length_squared() < 45.0 * 45.0;
+        let distance = line.length();
+        let scale = plate_scale(distance);
+        let visible = session.is_playing() && state.death.is_none() && distance < 45.0;
         let unblocked = if visible {
             if check_walls || !visibility.contains_key(&entity) {
                 let clear = level::world()
@@ -73,7 +83,9 @@ fn sync(
                     && point.y >= 0.0
                     && point.y <= window.height()
             });
-        if let Some((_, _, mut node)) = labels.iter_mut().find(|(_, plate, _)| plate.0 == entity) {
+        if let Some((_, _, mut node, mut transform)) =
+            labels.iter_mut().find(|(_, plate, _, _)| plate.0 == entity)
+        {
             node.display = if screen.is_some() {
                 Display::Flex
             } else {
@@ -81,7 +93,8 @@ fn sync(
             };
             if let Some(point) = screen {
                 node.left = px(point.x - 110.0);
-                node.top = px(point.y - 58.0);
+                node.top = px(plate_top(point.y, scale));
+                transform.scale = Vec2::splat(scale);
             }
             for (mut label, mut text) in &mut health_texts {
                 if label.player == entity {
@@ -118,13 +131,14 @@ fn sync(
                             Display::None
                         },
                         left: px(position.x - 110.0),
-                        top: px(position.y - 58.0),
+                        top: px(plate_top(position.y, scale)),
                         width: px(220.0),
                         flex_direction: FlexDirection::Column,
                         align_items: AlignItems::Center,
                         row_gap: px(2.0),
                         ..default()
                     },
+                    UiTransform::from_scale(Vec2::splat(scale)),
                 ))
                 .with_children(|plate| {
                     plate.spawn((
@@ -171,7 +185,7 @@ fn sync(
         }
     }
     visibility.retain(|entity, _| players.contains(*entity));
-    for (entity, plate, _) in &labels {
+    for (entity, plate, _, _) in &labels {
         if !players.contains(plate.0) {
             commands.entity(entity).despawn();
         }
