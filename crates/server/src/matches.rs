@@ -3,6 +3,7 @@ use hookrunner_shared::{
     PlayerId, PlayerInput, PlayerState,
     match_state::{MATCH_SECONDS, MatchState, RESULTS_SECONDS, ScoreRow},
     movement,
+    player_color::PlayerColor,
     protocol::PlayerName,
     weapon::Projectile,
 };
@@ -39,6 +40,7 @@ pub fn advance(
     mut players: Query<(
         &PlayerId,
         &PlayerName,
+        &PlayerColor,
         &mut PlayerState,
         Option<&ActionState<PlayerInput>>,
     )>,
@@ -87,7 +89,7 @@ pub fn advance(
             commands.entity(entity).despawn();
         }
     }
-    for (id, name, mut player, input) in &mut players {
+    for (id, name, color, mut player, input) in &mut players {
         if reset {
             movement::respawn(&mut player, &input.map(|a| a.0.clone()).unwrap_or_default());
         }
@@ -98,6 +100,7 @@ pub fn advance(
             round.rows.push(ScoreRow {
                 id: id.0,
                 nickname: name.0.clone(),
+                color: *color,
                 kills: 0,
                 deaths: 0,
                 connected: true,
@@ -108,10 +111,10 @@ pub fn advance(
     let changed = round
         .rows
         .iter()
-        .any(|row| row.connected != players.iter().any(|(id, _, _, _)| id.0 == row.id));
+        .any(|row| row.connected != players.iter().any(|(id, _, _, _, _)| id.0 == row.id));
     if changed {
         for row in &mut round.rows {
-            row.connected = players.iter().any(|(id, _, _, _)| id.0 == row.id);
+            row.connected = players.iter().any(|(id, _, _, _, _)| id.0 == row.id);
         }
     }
 }

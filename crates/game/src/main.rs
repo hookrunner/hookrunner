@@ -3,6 +3,7 @@ mod kill_feed;
 mod loading;
 mod map;
 mod mipmaps;
+mod nameplates;
 mod scoreboard;
 mod title;
 mod view;
@@ -41,6 +42,7 @@ fn main() -> AppExit {
             kill_feed::KillFeedPlugin,
             MaterialPlugin::<baked_material::BakedMaterial>::default(),
             view::ViewPlugin,
+            nameplates::NameplatesPlugin,
             weapon::WeaponPlugin,
         ))
         .run()

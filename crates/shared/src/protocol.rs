@@ -11,6 +11,7 @@ pub struct PlayerName(pub String);
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct JoinRequest {
     pub nickname: String,
+    pub color: u8,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -203,6 +204,7 @@ impl Plugin for ProtocolPlugin {
             .add_direction(NetworkDirection::ServerToClient);
         app.register_component::<crate::match_state::MatchState>();
         app.register_component::<PlayerName>();
+        app.register_component::<crate::player_color::PlayerColor>();
         app.register_component::<PlayerId>();
         app.register_component::<crate::weapon::Projectile>()
             .add_linear_interpolation();

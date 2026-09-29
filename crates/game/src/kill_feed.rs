@@ -1,7 +1,7 @@
 //! Server-confirmed kills; rendering is shared by web and native clients.
 use bevy::prelude::*;
 use hookrunner_client::Session;
-use hookrunner_shared::match_state::MatchState;
+use hookrunner_shared::{match_state::MatchState, player_color::PlayerColor};
 
 pub struct KillFeedPlugin;
 impl Plugin for KillFeedPlugin {
@@ -31,34 +31,43 @@ fn setup(mut commands: Commands) {
     ));
 }
 fn present(
+    mut commands: Commands,
     session: Res<Session>,
     rounds: Query<Ref<MatchState>>,
-    mut text: Single<&mut Text, With<KillFeed>>,
+    text: Single<Entity, With<KillFeed>>,
+    mut previous_spans: Local<Vec<(String, Option<PlayerColor>)>>,
 ) {
     if !session.is_changed() && !rounds.iter().any(|round| round.is_changed()) {
         return;
     }
-    let label = if session.is_playing() {
-        rounds
-            .iter()
-            .next()
-            .map(|round| {
-                round
-                    .kill_feed
-                    .iter()
-                    .rev()
-                    .map(|entry| match &entry.killer {
-                        Some(killer) => format!("{killer} > {}", entry.victim),
-                        None => format!("Arena > {}", entry.victim),
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            })
-            .unwrap_or_default()
-    } else {
-        String::new()
-    };
-    if text.0 != label {
-        text.0 = label;
+    let mut spans = Vec::new();
+    if session.is_playing() {
+        if let Some(round) = rounds.iter().next() {
+            for (index, entry) in round.kill_feed.iter().rev().enumerate() {
+                if index > 0 {
+                    spans.push(("\n".into(), None));
+                }
+                if let Some(killer) = &entry.killer {
+                    spans.push((killer.clone(), entry.killer_color));
+                    spans.push((" > ".into(), None));
+                } else {
+                    spans.push(("Arena > ".into(), None));
+                }
+                spans.push((entry.victim.clone(), Some(entry.victim_color)));
+            }
+        }
+    }
+    if *previous_spans != spans {
+        commands.entity(*text).despawn_related::<Children>();
+        commands.entity(*text).with_children(|parent| {
+            for (segment, color) in &spans {
+                let mut span = parent.spawn(TextSpan::new(segment.clone()));
+                if let Some(color) = color {
+                    let [r, g, b] = color.rgb();
+                    span.insert(TextColor(Color::srgb(r, g, b)));
+                }
+            }
+        });
+        *previous_spans = spans;
     }
 }

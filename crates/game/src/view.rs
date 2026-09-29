@@ -6,7 +6,9 @@ use bevy::{
     window::{CursorOptions, PrimaryWindow},
 };
 use hookrunner_client::{NetworkStats, Session};
-use hookrunner_shared::{PlayerId, PlayerInput, PlayerState, arena, level, movement};
+use hookrunner_shared::{
+    PlayerId, PlayerInput, PlayerState, arena, level, movement, player_color::PlayerColor,
+};
 use lightyear::prelude::{client::input::InputSystems, input::native::*, *};
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
@@ -111,11 +113,11 @@ type PlayerWithoutVisual = (With<PlayerId>, Without<PlayerVisual>);
 
 fn attach_visuals(
     mut commands: Commands,
-    players: Query<(Entity, Has<Predicted>), PlayerWithoutVisual>,
+    players: Query<(Entity, Has<Predicted>, &PlayerColor), PlayerWithoutVisual>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    for (entity, local) in &players {
+    for (entity, local, player_color) in &players {
         commands.entity(entity).insert((
             PlayerVisual,
             Transform::default(),
@@ -125,8 +127,9 @@ fn attach_visuals(
                 Visibility::Inherited
             },
         ));
+        let [r, g, b] = player_color.rgb();
         let color = materials.add(StandardMaterial {
-            base_color: Color::srgb(1.0, 0.28, 0.035),
+            base_color: Color::srgb(r, g, b),
             perceptual_roughness: 1.0,
             reflectance: 0.0,
             ..default()
@@ -255,13 +258,15 @@ fn follow_camera(
 }
 
 fn update_hud(
+    mut commands: Commands,
     rounds: Query<&hookrunner_shared::match_state::MatchState>,
-    players: Query<(&PlayerId, &PlayerState), With<Predicted>>,
+    players: Query<(&PlayerId, &PlayerState, &PlayerColor), With<Predicted>>,
     stats: Res<NetworkStats>,
     session: Res<Session>,
     time: Res<Time<Real>>,
     mut elapsed: Local<f32>,
-    mut hud: Single<&mut Text, With<Hud>>,
+    mut hud: Single<(Entity, &mut Text), With<Hud>>,
+    mut previous_spans: Local<Vec<(String, Option<PlayerColor>)>>,
 ) {
     *elapsed += time.delta_secs();
     if *elapsed < 0.1 {
@@ -277,25 +282,30 @@ fn update_hud(
     } else {
         0.0
     };
-    let mut label = if session.is_playing() {
-        format!("{fps:.0} fps, {ping} ms\n{}", session.nickname)
+    let label = if session.is_playing() {
+        format!("{fps:.0} fps, {ping} ms\n")
     } else {
         String::new()
     };
+    let mut spans = Vec::new();
     if session.is_playing() {
-        if let Some((_, state)) = players.iter().next() {
-            label.push_str(&format!(
-                "\nHP: {} / {}",
-                state.health.0,
-                hookrunner_shared::health::MAX_HEALTH
+        if let Some((_, state, color)) = players.iter().next() {
+            spans.push((session.nickname.clone(), Some(*color)));
+            spans.push((
+                format!(
+                    "\nHP: {} / {}",
+                    state.health.0,
+                    hookrunner_shared::health::MAX_HEALTH
+                ),
+                Some(*color),
             ));
             if let Some(death) = state.death {
                 if state.match_paused {
-                    label.push_str(" | Waiting for next match");
+                    spans.push((" | Waiting for next match".into(), None));
                 } else {
                     let seconds =
                         (death.remaining_ticks as f64 / hookrunner_shared::TICK_HZ).ceil() as u32;
-                    label.push_str(&format!(" | Respawn in {seconds}s"));
+                    spans.push((format!(" | Respawn in {seconds}s"), None));
                 }
             }
         }
@@ -306,38 +316,42 @@ fn update_hud(
             } else {
                 "Time left"
             };
-            label.push_str(&format!(
-                "\n{phase} {:02}:{:02}\n",
-                remaining / 60,
-                remaining % 60
+            spans.push((
+                format!("\n{phase} {:02}:{:02}\n", remaining / 60, remaining % 60),
+                None,
             ));
             let ranked = round.ranked();
             for (rank, row) in ranked.iter().take(3).enumerate() {
-                label.push_str(&format!(
-                    "\n{}. {}  {}K / {}D",
-                    rank + 1,
-                    row.nickname,
-                    row.kills,
-                    row.deaths
-                ));
+                spans.push((format!("\n{}. ", rank + 1), None));
+                spans.push((row.nickname.clone(), Some(row.color)));
+                spans.push((format!("  {}K / {}D", row.kills, row.deaths), None));
             }
-            let own = players.iter().next().map(|(id, _)| id.0);
+            let own = players.iter().next().map(|(id, _, _)| id.0);
             if let Some((rank, row)) = ranked
                 .iter()
                 .enumerate()
                 .find(|(_, row)| Some(row.id) == own)
             {
-                label.push_str(&format!(
-                    "\nYou: #{} {}  {}K / {}D",
-                    rank + 1,
-                    row.nickname,
-                    row.kills,
-                    row.deaths
-                ));
+                spans.push((format!("\nYou: #{} ", rank + 1), None));
+                spans.push((row.nickname.clone(), Some(row.color)));
+                spans.push((format!("  {}K / {}D", row.kills, row.deaths), None));
             }
         }
     }
-    if hud.0 != label {
-        hud.0 = label;
+    if hud.1.0 != label {
+        hud.1.0 = label;
+    }
+    if *previous_spans != spans {
+        commands.entity(hud.0).despawn_related::<Children>();
+        commands.entity(hud.0).with_children(|parent| {
+            for (segment, color) in &spans {
+                let mut span = parent.spawn(TextSpan::new(segment.clone()));
+                if let Some(color) = color {
+                    let [r, g, b] = color.rgb();
+                    span.insert(TextColor(Color::srgb(r, g, b)));
+                }
+            }
+        });
+        *previous_spans = spans;
     }
 }

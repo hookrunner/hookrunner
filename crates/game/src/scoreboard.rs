@@ -1,7 +1,7 @@
 //! Match presentation lives in Bevy on both platforms.
 use bevy::{input::mouse::MouseWheel, prelude::*, window::PrimaryWindow};
 use hookrunner_client::Session;
-use hookrunner_shared::{PlayerId, match_state::MatchState};
+use hookrunner_shared::{PlayerId, match_state::MatchState, player_color::PlayerColor};
 use lightyear::prelude::Predicted;
 
 pub struct ScoreboardPlugin;
@@ -49,15 +49,17 @@ fn setup(mut commands: Commands) {
 }
 
 fn present(
+    mut commands: Commands,
     session: Res<Session>,
     rounds: Query<Ref<MatchState>>,
     keys: Res<ButtonInput<KeyCode>>,
     players: Query<&PlayerId, With<Predicted>>,
     window: Single<&Window, With<PrimaryWindow>>,
     mut panel: Single<&mut Node, With<Scoreboard>>,
-    mut text: Single<&mut Text, With<ScoreboardText>>,
+    mut text: Single<(Entity, &mut Text), With<ScoreboardText>>,
     mut page: Local<usize>,
     mut previous_size: Local<Vec2>,
+    mut previous_spans: Local<Vec<(String, Option<PlayerColor>)>>,
     mut wheel: MessageReader<MouseWheel>,
 ) {
     let round = rounds.iter().next();
@@ -113,7 +115,8 @@ fn present(
             round.remaining_seconds % 60
         )
     };
-    let mut label = format!("{heading}\n{clock}\n\n    #  NICKNAME               KILLS DEATHS\n");
+    let label = format!("{heading}\n{clock}\n\n    #  NICKNAME               KILLS DEATHS\n");
+    let mut spans = Vec::new();
     for (rank, row) in rows
         .iter()
         .enumerate()
@@ -122,26 +125,34 @@ fn present(
     {
         let marker = if Some(row.id) == own { ">" } else { " " };
         let offline = if row.connected { " " } else { "*" };
-        label.push_str(&format!(
-            "{marker} {offline}{:>2}. {:<20} {:>5} {:>6}\n",
-            rank + 1,
-            row.nickname,
-            row.kills,
-            row.deaths
-        ));
+        spans.push((format!("{marker} {offline}{:>2}. ", rank + 1), None));
+        spans.push((format!("{:<20}", row.nickname), Some(row.color)));
+        spans.push((format!(" {:>5} {:>6}\n", row.kills, row.deaths), None));
     }
     if rows.is_empty() {
-        label.push_str("No participants yet\n");
+        spans.push(("No participants yet\n".into(), None));
     }
-    label.push_str("\n> You   * Disconnected");
+    spans.push(("\n> You   * Disconnected".into(), None));
     if pages > 1 {
-        label.push_str(&format!(
-            "\nPage {}/{} — PgUp/PgDn or wheel",
-            *page + 1,
-            pages
+        spans.push((
+            format!("\nPage {}/{} — PgUp/PgDn or wheel", *page + 1, pages),
+            None,
         ));
     }
-    if text.0 != label {
-        text.0 = label;
+    if text.1.0 != label {
+        text.1.0 = label;
+    }
+    if *previous_spans != spans {
+        commands.entity(text.0).despawn_related::<Children>();
+        commands.entity(text.0).with_children(|parent| {
+            for (segment, color) in &spans {
+                let mut span = parent.spawn(TextSpan::new(segment.clone()));
+                if let Some(color) = color {
+                    let [r, g, b] = color.rgb();
+                    span.insert(TextColor(Color::srgb(r, g, b)));
+                }
+            }
+        });
+        *previous_spans = spans;
     }
 }
