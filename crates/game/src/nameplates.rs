@@ -165,7 +165,7 @@ fn sync(
                             font_size: 12.0,
                             ..default()
                         },
-                        TextColor(Color::WHITE),
+                        TextColor(Color::srgb(r, g, b)),
                     ));
                 });
         }

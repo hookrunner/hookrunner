@@ -7,7 +7,7 @@ use bevy::{app::ScheduleRunnerPlugin, prelude::*};
 use hookrunner_shared::{
     PlayerId, PlayerInput, PlayerState, ProtocolPlugin, SEND_INTERVAL, TICK_DURATION, TICK_HZ,
     arena, movement,
-    player_color::PlayerColor,
+    player_color::{PALETTE, PlayerColor},
     protocol::{JoinRejected, JoinRequest, LobbyChannel, PlayerName},
     weapon::Projectile,
 };
@@ -95,11 +95,16 @@ fn spawn_players(
         ),
         (With<ClientOf>, With<Connected>),
     >,
-    players: Query<&PlayerState>,
+    players: Query<(&PlayerState, &PlayerColor)>,
     round: Res<hookrunner_shared::match_state::MatchState>,
     mut commands: Commands,
 ) {
-    let mut occupied: Vec<_> = players.iter().map(|p| p.position).collect();
+    let mut occupied = Vec::new();
+    let mut occupied_colors = [false; PALETTE.len()];
+    for (state, color) in &players {
+        occupied.push(state.position);
+        occupied_colors[color.0 as usize] = true;
+    }
     for (entity, remote, mut requests, mut replies, already_joined) in &mut links {
         let mut joined = already_joined;
         for request in requests.receive() {
@@ -121,6 +126,12 @@ fn spawn_players(
                 });
                 continue;
             };
+            if occupied_colors[color.0 as usize] {
+                replies.send::<LobbyChannel>(JoinRejected {
+                    reason: "This color is taken. Choose another.".into(),
+                });
+                continue;
+            }
             if occupied.len() >= arena::MAX_PLAYERS {
                 replies.send::<LobbyChannel>(JoinRejected {
                     reason: "The server is full. Please try again later.".into(),
@@ -131,6 +142,7 @@ fn spawn_players(
             let spawn = arena::spawn(spawn_index);
             let position = spawn.position;
             occupied.push(position);
+            occupied_colors[color.0 as usize] = true;
             let id = rand::random::<u64>();
             commands.spawn((
                 PlayerId(id),

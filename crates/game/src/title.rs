@@ -75,6 +75,11 @@ fn setup(mut commands: Commands) {
                         font_size: 42.0,
                         ..default()
                     },
+                    TextLayout::new_with_justify(Justify::Center),
+                    Node {
+                        width: percent(100),
+                        ..default()
+                    },
                 ));
                 panel
                     .spawn((
