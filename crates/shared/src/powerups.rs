@@ -30,11 +30,11 @@ impl Pickup {
             return false;
         }
         match self.kind {
-            PickupKind::Health if player.health.0 < MAX_HEALTH => {
+            PickupKind::Health => {
                 player.health.0 = MAX_HEALTH;
                 true
             }
-            PickupKind::Shield if player.shield < MAX_SHIELD => {
+            PickupKind::Shield => {
                 player.shield = MAX_SHIELD;
                 true
             }
@@ -54,7 +54,6 @@ impl Pickup {
                     .min(crate::weapon::RAPID_FIRE_COOLDOWN_TICKS);
                 true
             }
-            _ => false,
         }
     }
 }
