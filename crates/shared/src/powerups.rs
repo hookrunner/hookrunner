@@ -5,7 +5,7 @@ use crate::{PlayerState, health::MAX_HEALTH};
 
 pub const MAX_SHIELD: u16 = 100;
 pub const SPEED_DURATION_TICKS: u16 = (crate::TICK_HZ * 8.0) as u16;
-pub const SPEED_MULTIPLIER: f32 = 1.5;
+pub const SPEED_MULTIPLIER: f32 = 1.65;
 pub const STRENGTH_DURATION_TICKS: u16 = (crate::TICK_HZ * 6.0) as u16;
 pub const RAPID_FIRE_DURATION_TICKS: u16 = (crate::TICK_HZ * 8.0) as u16;
 
