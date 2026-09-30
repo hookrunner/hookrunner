@@ -8,7 +8,7 @@ use bevy::{
     transform::helper::TransformHelper,
 };
 use hookrunner_shared::{
-    PlayerId, PlayerInput, PlayerState, level,
+    PlayerId, PlayerInput, PlayerState, TICK_DURATION, level,
     weapon::{self, Projectile, ProjectileHit},
 };
 use lightyear::prelude::{input::native::ActionState, *};
@@ -81,7 +81,7 @@ enum BoltPart {
 #[derive(Component)]
 struct LocalBolt {
     bolt: Projectile,
-    age: f32,
+    accumulated_time: f64,
     muzzle: Vec3,
 }
 #[derive(Component)]
@@ -324,7 +324,7 @@ fn local_shots(
         .spawn((
             LocalBolt {
                 bolt,
-                age: 0.,
+                accumulated_time: 0.,
                 muzzle,
             },
             transform,
@@ -402,24 +402,36 @@ fn advance_local_bolts(
     mut bolts: Query<(Entity, &mut LocalBolt, &mut Transform, &Children), Without<BoltPart>>,
     mut parts: Query<(&BoltPart, &mut Transform), (Without<LocalBolt>, Without<BoltVisual>)>,
 ) {
+    let tick = TICK_DURATION.as_secs_f64();
     for (entity, mut local, mut transform, children) in &mut bolts {
-        let delta = local.bolt.direction * weapon::PROJECTILE_SPEED * time.delta_secs();
-        let radius = local.bolt.radius_at(local.bolt.position + delta);
-        if let Some(fraction) = level::world().sweep_sphere(local.bolt.position, delta, radius) {
-            let position = local.bolt.position + delta * fraction;
-            spawn_impact(
-                &mut commands,
-                &assets,
-                position,
-                -local.bolt.direction,
-                local.bolt.radius_at(position),
-            );
-            commands.entity(entity).despawn();
-            continue;
+        local.accumulated_time += time.delta_secs_f64();
+        let mut finished = false;
+        while local.accumulated_time >= tick {
+            local.accumulated_time -= tick;
+            let delta =
+                local.bolt.direction * weapon::PROJECTILE_SPEED * TICK_DURATION.as_secs_f32();
+            let radius = local.bolt.radius_at(local.bolt.position + delta);
+            if let Some(fraction) = level::world().sweep_sphere(local.bolt.position, delta, radius)
+            {
+                let position = local.bolt.position + delta * fraction;
+                spawn_impact(
+                    &mut commands,
+                    &assets,
+                    position,
+                    -local.bolt.direction,
+                    local.bolt.radius_at(position),
+                );
+                finished = true;
+                break;
+            }
+            local.bolt.position += delta;
+            local.bolt.remaining_ticks -= 1;
+            if local.bolt.remaining_ticks == 0 {
+                finished = true;
+                break;
+            }
         }
-        local.bolt.position += delta;
-        local.age += time.delta_secs();
-        if local.age >= 2. {
+        if finished {
             commands.entity(entity).despawn();
             continue;
         }
