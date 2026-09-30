@@ -32,6 +32,13 @@ pub fn collect(
             if center.distance_squared(pickup.position) > COLLECTION_RADIUS * COLLECTION_RADIUS {
                 continue;
             }
+            // A nearby pickup on the far side of a thin wall is not reachable.
+            if level::world()
+                .sweep_sphere(center, pickup.position - center, 0.02)
+                .is_some()
+            {
+                continue;
+            }
             if pickup.apply(&mut player) {
                 commands.entity(entity).despawn();
                 info!("Player {:016x} collected {:?}", id.0, pickup.kind);
@@ -98,16 +105,13 @@ fn spawn_random(
     occupied: &mut Vec<Vec3>,
     players: &Query<&PlayerState>,
 ) {
-    let candidates = &level::data().pickup_spawns;
+    let candidates = level::pickup_slots();
     if candidates.is_empty() {
         return;
     }
     let start = rand::random::<u32>() as usize % candidates.len();
     for offset in 0..candidates.len() {
-        let raw = candidates[(start + offset) % candidates.len()];
-        let Some(feet) = level::world().ground(raw + Vec3::Y * 1.0, 3.0) else {
-            continue;
-        };
+        let feet = candidates[(start + offset) % candidates.len()];
         let position = feet + Vec3::Y * 0.65;
         if occupied
             .iter()

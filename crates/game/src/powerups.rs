@@ -1,5 +1,8 @@
 use bevy::{light::NotShadowCaster, prelude::*};
-use hookrunner_shared::powerups::{Pickup, PickupKind};
+use hookrunner_shared::{
+    level,
+    powerups::{Pickup, PickupKind},
+};
 
 pub struct PowerupVisualsPlugin;
 
@@ -36,6 +39,23 @@ fn setup(
         unlit: true,
         ..default()
     };
+    let floor_ring = meshes.add(Annulus::new(0.42, 0.51));
+    let floor_mark = materials.add(StandardMaterial {
+        base_color: Color::srgba(0.28, 0.77, 0.92, 0.48),
+        unlit: true,
+        alpha_mode: AlphaMode::Blend,
+        double_sided: true,
+        ..default()
+    });
+    for &feet in level::pickup_slots() {
+        commands.spawn((
+            Mesh3d(floor_ring.clone()),
+            MeshMaterial3d(floor_mark.clone()),
+            Transform::from_translation(feet + Vec3::Y * 0.035)
+                .with_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
+            NotShadowCaster,
+        ));
+    }
     commands.insert_resource(PickupAssets {
         cube: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
         sphere: meshes.add(Sphere::new(1.0).mesh().ico(2).unwrap()),
