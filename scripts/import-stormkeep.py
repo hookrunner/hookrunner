@@ -178,6 +178,7 @@ class Compiler:
         self.collision = []
         self.triggers = []
         self.spawns = []
+        self.pickup_spawns = []
         self.warps = []
         self.targets = {p['targetname']: p for p, _, _ in entities if 'targetname' in p}
         self.counts = defaultdict(int)
@@ -331,6 +332,8 @@ class Compiler:
             if classname == 'info_player_deathmatch':
                 self.spawns.append(dict(position=(world(vec(props['origin'])) - np.array([0, 24 * SCALE, 0])).tolist(),
                                         yaw=math.radians(float(props.get('angle', 0))) - math.pi / 2))
+            elif classname.startswith(('item_health_', 'item_armor_')) or classname == 'item_strength':
+                self.pickup_spawns.append(world(vec(props['origin'])).tolist())
             elif classname in ['misc_model', 'misc_gamemodel']:
                 self.model(props)
             if classname in ['worldspawn', 'func_group', 'func_wall', 'func_bobbing', 'trigger_push', 'trigger_teleport', 'trigger_warpzone', 'trigger_hurt']:
@@ -363,7 +366,7 @@ class Compiler:
             f.write(np.asarray(vertices, dtype='<f4').tobytes())
             f.write(np.asarray(indices, dtype='<u4').tobytes())
         lightmaps, render_triangles = bsp.render(self, BUILT, ROTATE, SCALE)
-        metadata = dict(name='Stormkeep', units_per_metre=40, spawns=self.spawns, triggers=self.triggers,
+        metadata = dict(name='Stormkeep', units_per_metre=40, spawns=self.spawns, pickup_spawns=self.pickup_spawns, triggers=self.triggers,
                         lightmaps=lightmaps, sky=skybox(SOURCE, BUILT), materials=list(self.materials.values()), counts=dict(self.counts),
                         collision_triangles=len(indices), render_triangles=render_triangles)
         used_textures = {metadata['sky'], *lightmaps}

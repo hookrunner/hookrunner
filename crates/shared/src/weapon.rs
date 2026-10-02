@@ -11,7 +11,9 @@ use serde::{Deserialize, Serialize};
 use crate::{PlayerInput, PlayerState, arena, level::CollisionWorld};
 
 pub const FIRE_COOLDOWN_TICKS: u16 = (crate::TICK_HZ * 0.2) as u16;
+pub const RAPID_FIRE_COOLDOWN_TICKS: u16 = FIRE_COOLDOWN_TICKS / 2;
 pub const PROJECTILE_DAMAGE: u16 = 25;
+pub const STRENGTH_DAMAGE_MULTIPLIER: u16 = 2;
 pub const PROJECTILE_SPEED: f32 = 120.0;
 pub const PROJECTILE_RADIUS: f32 = 0.045;
 pub const PROJECTILE_LENGTH: f32 = 2.4;
@@ -24,11 +26,16 @@ pub struct WeaponState {
 }
 
 pub fn step(state: &mut PlayerState, input: &PlayerInput) {
+    let rapid_fire = state.rapid_fire_ticks > 0;
     let weapon = &mut state.weapon;
     weapon.cooldown_ticks = weapon.cooldown_ticks.saturating_sub(1);
     if input.fire && weapon.cooldown_ticks == 0 && state.death.is_none() {
         weapon.shot = weapon.shot.wrapping_add(1);
-        weapon.cooldown_ticks = FIRE_COOLDOWN_TICKS;
+        weapon.cooldown_ticks = if rapid_fire {
+            RAPID_FIRE_COOLDOWN_TICKS
+        } else {
+            FIRE_COOLDOWN_TICKS
+        };
     }
 }
 
@@ -40,6 +47,7 @@ pub struct Projectile {
     pub position: Vec3,
     pub direction: Vec3,
     pub remaining_ticks: u16,
+    pub damage: u16,
 }
 
 impl Projectile {
@@ -53,6 +61,11 @@ impl Projectile {
             direction: Quat::from_euler(EulerRot::YXZ, state.yaw, input.pitch_radians(), 0.0)
                 * Vec3::NEG_Z,
             remaining_ticks: PROJECTILE_LIFETIME_TICKS,
+            damage: if state.strength_ticks > 0 {
+                PROJECTILE_DAMAGE * STRENGTH_DAMAGE_MULTIPLIER
+            } else {
+                PROJECTILE_DAMAGE
+            },
         }
     }
 }
