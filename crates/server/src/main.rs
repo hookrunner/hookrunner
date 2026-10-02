@@ -15,6 +15,10 @@ use lightyear::prelude::{input::native::ActionState, server::*, *};
 use std::{net::SocketAddr, time::Duration};
 
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("--print-build") {
+        println!("{}", hookrunner_shared::SIMULATION_BUILD);
+        return;
+    }
     let address: SocketAddr = std::env::var("HOOKRUNNER_BIND")
         .unwrap_or_else(|_| "0.0.0.0:5000".into())
         .parse()

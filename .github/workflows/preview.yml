@@ -1,0 +1,142 @@
+name: PR preview
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, closed]
+
+# Each synchronize event replaces the PR's previous workflow run.
+concurrency:
+  group: preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    if: >-
+      github.event.action != 'closed' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      vars.PREVIEW_API_URL != ''
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: ./.github/actions/build-preview
+
+      - name: Upload and wait for deployment
+        id: preview
+        env:
+          PREVIEW_API_URL: ${{ vars.PREVIEW_API_URL }}
+          PREVIEW_TOKEN: ${{ secrets.PREVIEW_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'PY'
+          import json, os, time, urllib.request
+
+          base = os.environ['PREVIEW_API_URL'].rstrip('/')
+          token = os.environ['PREVIEW_TOKEN']
+          if not token:
+              raise SystemExit('Set the PREVIEW_TOKEN repository secret.')
+          headers = {'Authorization': f'Bearer {token}'}
+          with open('dist/preview.tar.gz', 'rb') as f:
+              bundle = f.read()
+          request = urllib.request.Request(
+              f"{base}/deployments?pr={os.environ['PR_NUMBER']}&sha={os.environ['PR_SHA']}",
+              data=bundle, headers={**headers, 'Content-Type': 'application/gzip'}, method='POST')
+          with urllib.request.urlopen(request, timeout=300) as response:
+              job = json.load(response)
+          for _ in range(120):
+              request = urllib.request.Request(f"{base}/deployments/{job['id']}", headers=headers)
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  job = json.load(response)
+              if job['status'] == 'ready':
+                  with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                      f.write(f"url={job['url']}\n")
+                  break
+              if job['status'] not in ('queued', 'deploying'):
+                  raise SystemExit(f"Deployment {job['status']}: {job.get('error', '')}")
+              time.sleep(2)
+          else:
+              raise SystemExit('Timed out waiting for deployment.')
+          PY
+
+    outputs:
+      url: ${{ steps.preview.outputs.url }}
+
+  comment:
+    needs: deploy
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Update preview comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_SHA: ${{ github.event.pull_request.head.sha }}
+          PREVIEW_URL: ${{ needs.deploy.outputs.url }}
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess
+
+          def gh(*args):
+              return json.loads(subprocess.check_output(['gh', *args]))
+
+          repo, pr = os.environ['GH_REPO'], os.environ['PR_NUMBER']
+          pull = gh('api', f'repos/{repo}/pulls/{pr}')
+          if pull['state'] != 'open' or pull['head']['sha'] != os.environ['PR_SHA']:
+              raise SystemExit('PR changed; skipping stale comment.')
+          marker = '<!-- hookrunner-preview -->'
+          body = f"{marker}\n[Play PR #{pr}]({os.environ['PREVIEW_URL']})\n\nCommit: `{os.environ['PR_SHA']}`"
+          pages = gh('api', '--paginate', '--slurp', f'repos/{repo}/issues/{pr}/comments')
+          previous = next((c for page in pages for c in page
+                           if c['user']['login'] == 'github-actions[bot]' and marker in c['body']), None)
+          endpoint = f"repos/{repo}/issues/comments/{previous['id']}" if previous else f'repos/{repo}/issues/{pr}/comments'
+          subprocess.run(['gh', 'api', '--method', 'PATCH' if previous else 'POST', endpoint, '--input', '-'],
+                         input=json.dumps({'body': body}).encode(), check=True, stdout=subprocess.DEVNULL)
+          PY
+
+  cleanup:
+    if: >-
+      github.event.action == 'closed' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      vars.PREVIEW_API_URL != ''
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Stop preview and update comment
+        env:
+          PREVIEW_API_URL: ${{ vars.PREVIEW_API_URL }}
+          PREVIEW_TOKEN: ${{ secrets.PREVIEW_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess, urllib.request
+
+          repo, pr = os.environ['GH_REPO'], os.environ['PR_NUMBER']
+          request = urllib.request.Request(
+              f"{os.environ['PREVIEW_API_URL'].rstrip('/')}/previews/{pr}",
+              headers={'Authorization': f"Bearer {os.environ['PREVIEW_TOKEN']}"}, method='DELETE')
+          with urllib.request.urlopen(request, timeout=60) as response:
+              json.load(response)
+          marker = '<!-- hookrunner-preview -->'
+          pages = json.loads(subprocess.check_output(['gh', 'api', '--paginate', '--slurp', f'repos/{repo}/issues/{pr}/comments']))
+          previous = next((c for page in pages for c in page
+                           if c['user']['login'] == 'github-actions[bot]' and marker in c['body']), None)
+          # Recheck after cleanup in case the PR was reopened while the API call ran.
+          pull = json.loads(subprocess.check_output(['gh', 'api', f'repos/{repo}/pulls/{pr}']))
+          if previous and pull['state'] == 'closed':
+              subprocess.run(['gh', 'api', '--method', 'PATCH', f"repos/{repo}/issues/comments/{previous['id']}", '--input', '-'],
+                             input=json.dumps({'body': f'{marker}\nPreview stopped: PR closed or merged.'}).encode(),
+                             check=True, stdout=subprocess.DEVNULL)
+          PY

@@ -1,0 +1,35 @@
+name: Warm preview build cache
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.cargo/**'
+      - 'crates/**'
+      - 'assets/**'
+      - 'web/**'
+      - 'scripts/build-preview.sh'
+      - 'scripts/build-web.sh'
+      - '.github/actions/build-preview/**'
+      - '.github/workflows/preview-cache.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: preview-cache-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/build-preview

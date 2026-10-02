@@ -1,0 +1,36 @@
+name: Build preview bundle
+description: Build the ARM64 server and browser client with cached Rust dependencies
+
+runs:
+  using: composite
+  steps:
+    - name: Install pinned Rust toolchain
+      shell: bash
+      run: rustup show
+
+    # Restore after selecting the toolchain, before installing Cargo tools.
+    # Both the PR workflow and main-branch warm-up use the same cache key.
+    - name: Restore Rust dependencies and tools
+      uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: preview-arm64
+        cache-on-failure: true
+
+    - name: Install matching wasm-bindgen if needed
+      shell: bash
+      run: |
+        version=$(python3 - <<'PY'
+        import tomllib
+        with open('Cargo.lock', 'rb') as f:
+            print(next(p['version'] for p in tomllib.load(f)['package'] if p['name'] == 'wasm-bindgen'))
+        PY
+        )
+        if command -v wasm-bindgen >/dev/null && [[ $(wasm-bindgen --version) == "wasm-bindgen $version" ]]; then
+          echo "Using cached wasm-bindgen $version"
+        else
+          cargo install wasm-bindgen-cli --version "$version" --locked
+        fi
+
+    - name: Build ARM64 server and browser client
+      shell: bash
+      run: ./scripts/build-preview.sh
