@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -32,7 +33,8 @@ var webHashPattern = regexp.MustCompile(`^[a-f0-9]{16}$`)
 
 type config struct {
 	listen, ip, token, repository, githubToken, data, bwrap string
-	firstPort, lastPort, maxPreviews                        int
+	firstPort, lastPort, mainPort, maxPreviews              int
+	mainDeployment                                          bool
 	ttl                                                     time.Duration
 }
 
@@ -58,7 +60,7 @@ func loadConfig() (config, error) {
 	if !regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`).MatchString(c.repository) {
 		return c, errors.New("PREVIEW_REPOSITORY must be owner/repository")
 	}
-	ports := strings.Split(env("PREVIEW_PORTS", "20000-20100"), "-")
+	ports := strings.Split(env("PREVIEW_PORTS", "20001-20100"), "-")
 	if len(ports) != 2 {
 		return c, errors.New("PREVIEW_PORTS must be first-last")
 	}
@@ -73,6 +75,10 @@ func loadConfig() (config, error) {
 	}
 	if c.firstPort < 1024 || c.lastPort > 65535 || c.lastPort < c.firstPort {
 		return c, errors.New("PREVIEW_PORTS must be within 1024-65535")
+	}
+	c.mainPort, err = strconv.Atoi(env("PREVIEW_MAIN_PORT", "20000"))
+	if err != nil || c.mainPort < 1024 || c.mainPort > 65535 || (c.mainPort >= c.firstPort && c.mainPort <= c.lastPort) {
+		return c, errors.New("PREVIEW_MAIN_PORT must be within 1024-65535 and outside PREVIEW_PORTS")
 	}
 	c.maxPreviews, err = strconv.Atoi(env("PREVIEW_MAX", "5"))
 	if err != nil || c.maxPreviews < 1 {
@@ -95,7 +101,8 @@ func loadConfig() (config, error) {
 
 type job struct {
 	ID      string `json:"id"`
-	PR      int    `json:"pr"`
+	PR      int    `json:"pr,omitempty"`
+	Branch  string `json:"branch,omitempty"`
 	SHA     string `json:"sha"`
 	Status  string `json:"status"`
 	URL     string `json:"url,omitempty"`
@@ -114,15 +121,46 @@ type service struct {
 	active  map[int]*preview
 	queue   chan *job
 	// Injectable only for local verification; production uses the GitHub API and bwrap.
-	checkPR func(context.Context, int, string, bool) error
-	launch  func(context.Context, string, config) (*preview, error)
+	checkPR   func(context.Context, int, string, bool) error
+	checkMain func(context.Context, string) error
+	launch    func(context.Context, string, config) (*preview, error)
 }
 
 func newService(c config) *service {
 	s := &service{config: c, jobs: make(map[string]*job), current: make(map[int]*job), active: make(map[int]*preview), queue: make(chan *job, 16)}
 	s.checkPR = s.verifyPR
+	s.checkMain = s.verifyMain
 	s.launch = launchPreview
 	return s
+}
+
+// Key zero is reserved for main; external PR numbers must always be positive.
+func (s *service) checkDeployment(ctx context.Context, pr int, sha string) error {
+	if pr == 0 {
+		return s.checkMain(ctx, sha)
+	}
+	return s.checkPR(ctx, pr, sha, false)
+}
+
+func (j *job) target() string {
+	if j.PR == 0 {
+		return "main"
+	}
+	return fmt.Sprintf("PR #%d", j.PR)
+}
+
+func (s *service) mainHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		p := s.active[0]
+		s.mu.Unlock()
+		if p == nil {
+			w.Header().Set("Cache-Control", "no-store")
+			http.Error(w, "Game unavailable. Try again shortly.", http.StatusServiceUnavailable)
+			return
+		}
+		p.handler.ServeHTTP(w, r)
+	})
 }
 
 func respond(w http.ResponseWriter, status int, value any) {
@@ -168,7 +206,14 @@ func parsePR(value string) (int, error) {
 }
 
 func (s *service) upload(w http.ResponseWriter, r *http.Request) {
-	pr, err := parsePR(r.URL.Query().Get("pr"))
+	var pr int
+	var err error
+	branch := r.URL.Query().Get("branch")
+	if branch == "" {
+		pr, err = parsePR(r.URL.Query().Get("pr"))
+	} else if branch != "main" || r.URL.Query().Has("pr") {
+		err = errors.New("specify either pr or branch=main")
+	}
 	if err != nil {
 		apiError(w, 400, err)
 		return
@@ -178,7 +223,7 @@ func (s *service) upload(w http.ResponseWriter, r *http.Request) {
 		apiError(w, 400, errors.New("sha must be a full lowercase commit SHA"))
 		return
 	}
-	if err := s.checkPR(r.Context(), pr, sha, false); err != nil {
+	if err := s.checkDeployment(r.Context(), pr, sha); err != nil {
 		apiError(w, 409, err)
 		return
 	}
@@ -206,7 +251,7 @@ func (s *service) upload(w http.ResponseWriter, r *http.Request) {
 	defer s.mu.Unlock()
 	// Serialize the final head check with registration. Otherwise an older
 	// upload could finish its check, pause, and then cancel a newer deployment.
-	if err = s.checkPR(r.Context(), pr, sha, false); err != nil {
+	if err = s.checkDeployment(r.Context(), pr, sha); err != nil {
 		apiError(w, 409, err)
 		return
 	}
@@ -214,7 +259,11 @@ func (s *service) upload(w http.ResponseWriter, r *http.Request) {
 		respond(w, 202, previous)
 		return
 	}
-	if _, exists := s.current[pr]; !exists && len(s.current) >= s.config.maxPreviews {
+	previewCount := len(s.current)
+	if s.current[0] != nil {
+		previewCount--
+	}
+	if _, exists := s.current[pr]; pr != 0 && !exists && previewCount >= s.config.maxPreviews {
 		apiError(w, 429, errors.New("active preview limit reached"))
 		return
 	}
@@ -228,7 +277,7 @@ func (s *service) upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	j := &job{ID: hex.EncodeToString(id), PR: pr, SHA: sha, Status: "queued", created: time.Now(), archive: archive.Name(), ctx: ctx, cancel: cancel}
+	j := &job{ID: hex.EncodeToString(id), PR: pr, Branch: branch, SHA: sha, Status: "queued", created: time.Now(), archive: archive.Name(), ctx: ctx, cancel: cancel}
 	archive = nil // The worker now owns the temporary file.
 	if previous := s.current[pr]; previous != nil {
 		previous.cancel()
@@ -295,10 +344,12 @@ func (s *service) deploy(j *job) {
 	}
 	var p *preview
 	if err == nil {
-		p, err = s.launch(j.ctx, dir, s.config)
+		c := s.config
+		c.mainDeployment = j.PR == 0
+		p, err = s.launch(j.ctx, dir, c)
 	}
 	if err == nil {
-		err = s.checkPR(j.ctx, j.PR, j.SHA, false)
+		err = s.checkDeployment(j.ctx, j.PR, j.SHA)
 	}
 	s.mu.Lock()
 	if j.ctx.Err() != nil || s.current[j.PR] != j {
@@ -319,7 +370,7 @@ func (s *service) deploy(j *job) {
 			p.stop()
 		}
 		_ = os.RemoveAll(dir)
-		log.Printf("PR #%d deployment failed: %v", j.PR, err)
+		log.Printf("%s deployment failed: %v", j.target(), err)
 		return
 	}
 	old := s.active[j.PR]
@@ -334,7 +385,7 @@ func (s *service) deploy(j *job) {
 		j.Status, j.URL = "ready", p.url
 	}
 	s.mu.Unlock()
-	log.Printf("PR #%d at %s (%s)", j.PR, p.url, j.SHA)
+	log.Printf("%s at %s (%s)", j.target(), p.url, j.SHA)
 	go func() {
 		<-p.done
 		s.mu.Lock()
@@ -363,7 +414,7 @@ func (s *service) maintain(ctx context.Context) {
 			s.mu.Lock()
 			var expired []*preview
 			for pr, p := range s.active {
-				if now.Sub(p.created) > s.config.ttl {
+				if pr != 0 && now.Sub(p.created) > s.config.ttl {
 					if j := s.current[pr]; j != nil && (j.Status == "queued" || j.Status == "deploying") {
 						continue
 					}
@@ -418,6 +469,17 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	s := newService(c)
+	mainListener, err := net.Listen("tcp", net.JoinHostPort("", strconv.Itoa(c.mainPort)))
+	if err != nil {
+		log.Fatalf("reserve main port: %v", err)
+	}
+	mainServer := &http.Server{Handler: s.mainHandler(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: time.Minute, MaxHeaderBytes: 16 << 10}
+	go func() {
+		if err := mainServer.Serve(mainListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("main HTTP server: %v", err)
+			cancel()
+		}
+	}()
 	var workers sync.WaitGroup
 	workers.Add(2)
 	go func() { defer workers.Done(); s.worker(ctx) }()
@@ -431,8 +493,9 @@ func main() {
 		}
 		s.mu.Unlock()
 		_ = server.Close()
+		_ = mainServer.Close()
 	}()
-	log.Printf("preview API on %s; public IP %s, ports %d-%d", c.listen, c.ip, c.firstPort, c.lastPort)
+	log.Printf("preview API on %s; public IP %s, main port %d, PR ports %d-%d", c.listen, c.ip, c.mainPort, c.firstPort, c.lastPort)
 	err = server.ListenAndServe()
 	cancel()
 	workers.Wait()

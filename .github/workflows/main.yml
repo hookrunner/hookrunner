@@ -1,0 +1,37 @@
+name: Deploy main
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-main
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main' && vars.PREVIEW_API_URL != ''
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/build-preview
+      - name: Upload and wait for deployment
+        id: deployment
+        env:
+          PREVIEW_API_URL: ${{ vars.PREVIEW_API_URL }}
+          PREVIEW_TOKEN: ${{ secrets.PREVIEW_TOKEN }}
+          DEPLOY_BRANCH: main
+          DEPLOY_SHA: ${{ github.sha }}
+        run: python3 .github/scripts/deploy-preview.py
+      - name: Show game link
+        env:
+          GAME_URL: ${{ steps.deployment.outputs.url }}
+        run: echo "[Play current main]($GAME_URL)" >> "$GITHUB_STEP_SUMMARY"

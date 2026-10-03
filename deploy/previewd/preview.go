@@ -132,6 +132,7 @@ type preview struct {
 	cmd            *exec.Cmd
 	done           chan struct{}
 	web            *http.Server
+	handler        http.Handler
 	once           sync.Once
 }
 
@@ -195,9 +196,13 @@ func listenPreview(c config) (net.Listener, error) {
 }
 
 func launchPreview(ctx context.Context, dir string, c config) (*preview, error) {
-	public, err := listenPreview(c)
-	if err != nil {
-		return nil, err
+	var public net.Listener
+	var err error
+	if !c.mainDeployment {
+		public, err = listenPreview(c)
+		if err != nil {
+			return nil, err
+		}
 	}
 	defer func() {
 		if public != nil {
@@ -271,16 +276,19 @@ func launchPreview(ctx context.Context, dir string, c config) (*preview, error) 
 			}
 			return nil, fmt.Errorf("%w: %s", err, strings.TrimSpace(string(logs)))
 		}
-		port := public.Addr().(*net.TCPAddr).Port
+		port := c.mainPort
+		if public != nil {
+			port = public.Addr().(*net.TCPAddr).Port
+		}
 		endpoint := &url.URL{Scheme: "http", Host: net.JoinHostPort(c.ip, strconv.Itoa(port)), Path: "/"}
-		ws := &url.URL{Scheme: "ws", Host: endpoint.Host, Path: "/ws"}
-		query := url.Values{"server": []string{ws.String()}}
-		endpoint.RawQuery = query.Encode()
 		p.url = endpoint.String()
-		p.web = &http.Server{Handler: gameHandler(filepath.Join(dir, "dist"), address, manifest.Build), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: time.Minute, MaxHeaderBytes: 16 << 10}
-		listener := public
-		public = nil
-		go func() { _ = p.web.Serve(listener) }()
+		p.handler = gameHandler(filepath.Join(dir, "dist"), address, manifest.Build)
+		if public != nil {
+			p.web = &http.Server{Handler: p.handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: time.Minute, MaxHeaderBytes: 16 << 10}
+			listener := public
+			public = nil
+			go func() { _ = p.web.Serve(listener) }()
+		}
 		return p, nil
 	}
 	return nil, errors.New("could not reserve a game server port after three attempts")
