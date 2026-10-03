@@ -12,10 +12,10 @@ import (
 
 // Verify at upload time and before publication, so canceled/force-pushed builds
 // cannot win a race against a newer commit or a PR close/reopen event.
-func (s *service) verifyPR(ctx context.Context, pr int, sha string, closed bool) error {
+func (s *service) githubJSON(ctx context.Context, path string, value any) error {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	request, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("https://api.github.com/repos/%s/pulls/%d", s.config.repository, pr), nil)
+	request, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("https://api.github.com/repos/%s/%s", s.config.repository, path), nil)
 	if err != nil {
 		return err
 	}
@@ -26,12 +26,31 @@ func (s *service) verifyPR(ctx context.Context, pr int, sha string, closed bool)
 	}
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
-		return fmt.Errorf("check PR: %w", err)
+		return fmt.Errorf("check GitHub: %w", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != 200 {
-		return fmt.Errorf("GitHub PR lookup returned %d; check PREVIEW_GITHUB_TOKEN and repository access", response.StatusCode)
+		return fmt.Errorf("GitHub %s lookup returned %d; check PREVIEW_GITHUB_TOKEN and repository access", path, response.StatusCode)
 	}
+	return json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(value)
+}
+
+func (s *service) verifyMain(ctx context.Context, sha string) error {
+	var ref struct {
+		Object struct {
+			SHA string `json:"sha"`
+		} `json:"object"`
+	}
+	if err := s.githubJSON(ctx, "git/ref/heads/main", &ref); err != nil {
+		return err
+	}
+	if ref.Object.SHA != sha {
+		return fmt.Errorf("%s is no longer the main branch head", sha)
+	}
+	return nil
+}
+
+func (s *service) verifyPR(ctx context.Context, pr int, sha string, closed bool) error {
 	var pull struct {
 		State string `json:"state"`
 		Head  struct {
@@ -41,7 +60,7 @@ func (s *service) verifyPR(ctx context.Context, pr int, sha string, closed bool)
 			} `json:"repo"`
 		} `json:"head"`
 	}
-	if err = json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&pull); err != nil {
+	if err := s.githubJSON(ctx, fmt.Sprintf("pulls/%d", pr), &pull); err != nil {
 		return err
 	}
 	if closed {

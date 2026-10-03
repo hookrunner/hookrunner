@@ -5,7 +5,7 @@ import json
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit
 
 
 class PreviewHandler(SimpleHTTPRequestHandler):
@@ -14,6 +14,18 @@ class PreviewHandler(SimpleHTTPRequestHandler):
 
     def send_head(self):
         self.build_mismatch = False
+        location = urlsplit(self.path)
+        query = dict(parse_qsl(location.query, keep_blank_values=True))
+        if location.path in ('/', '/index.html') and 'server' not in query:
+            # Local development runs the Rust server separately on port 5000.
+            host = urlsplit('http://' + self.headers['Host']).hostname
+            if ':' in host:
+                host = f'[{host}]'
+            query['server'] = f'ws://{host}:5000'
+            self.send_response(302)
+            self.send_header('Location', location.path + '?' + urlencode(query))
+            self.end_headers()
+            return None
         try:
             current = json.loads((Path(self.directory) / 'build.json').read_text())['build']
         except (OSError, ValueError, KeyError):

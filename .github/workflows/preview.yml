@@ -34,37 +34,8 @@ jobs:
           PREVIEW_API_URL: ${{ vars.PREVIEW_API_URL }}
           PREVIEW_TOKEN: ${{ secrets.PREVIEW_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          python3 - <<'PY'
-          import json, os, time, urllib.request
-
-          base = os.environ['PREVIEW_API_URL'].rstrip('/')
-          token = os.environ['PREVIEW_TOKEN']
-          if not token:
-              raise SystemExit('Set the PREVIEW_TOKEN repository secret.')
-          headers = {'Authorization': f'Bearer {token}'}
-          with open('dist/preview.tar.gz', 'rb') as f:
-              bundle = f.read()
-          request = urllib.request.Request(
-              f"{base}/deployments?pr={os.environ['PR_NUMBER']}&sha={os.environ['PR_SHA']}",
-              data=bundle, headers={**headers, 'Content-Type': 'application/gzip'}, method='POST')
-          with urllib.request.urlopen(request, timeout=300) as response:
-              job = json.load(response)
-          for _ in range(120):
-              request = urllib.request.Request(f"{base}/deployments/{job['id']}", headers=headers)
-              with urllib.request.urlopen(request, timeout=30) as response:
-                  job = json.load(response)
-              if job['status'] == 'ready':
-                  with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-                      f.write(f"url={job['url']}\n")
-                  break
-              if job['status'] not in ('queued', 'deploying'):
-                  raise SystemExit(f"Deployment {job['status']}: {job.get('error', '')}")
-              time.sleep(2)
-          else:
-              raise SystemExit('Timed out waiting for deployment.')
-          PY
+          DEPLOY_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 .github/scripts/deploy-preview.py
 
     outputs:
       url: ${{ steps.preview.outputs.url }}

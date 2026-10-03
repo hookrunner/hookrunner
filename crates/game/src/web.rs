@@ -12,7 +12,7 @@ pub fn configure(app: &mut App) {
         } else {
             "ws"
         };
-        format!("{scheme}://{}:5000", location.hostname().unwrap())
+        format!("{scheme}://{}/ws", location.host().unwrap())
     });
     app.insert_resource(ServerUrl(server)).add_plugins(
         DefaultPlugins
