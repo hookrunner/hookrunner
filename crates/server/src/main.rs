@@ -1,5 +1,6 @@
 mod build_check;
 mod combat;
+mod history;
 mod loading;
 mod matches;
 
@@ -36,12 +37,22 @@ fn main() {
         .insert_resource(BindAddress(address))
         .init_resource::<hookrunner_shared::match_state::MatchState>()
         .init_resource::<matches::MatchClock>()
+        .init_resource::<history::PlayerHistory>()
         .add_systems(Startup, (start, matches::setup))
         .add_systems(PreUpdate, matches::advance)
         .add_observer(configure_link)
         .add_systems(Update, spawn_players)
         .add_observer(log_disconnect)
-        .add_systems(FixedUpdate, (simulate, combat::advance_projectiles).chain())
+        .add_systems(
+            FixedUpdate,
+            (
+                history::capture_before,
+                simulate,
+                history::capture_after,
+                combat::advance_projectiles,
+            )
+                .chain(),
+        )
         .add_systems(
             PostUpdate,
             (combat::publish_projectiles, matches::publish).before(ReplicationSystems::Send),
@@ -182,9 +193,18 @@ fn spawn_players(
 fn simulate(
     mut commands: Commands,
     mut round: ResMut<hookrunner_shared::match_state::MatchState>,
-    mut players: Query<(&PlayerId, &mut PlayerState, &ActionState<PlayerInput>)>,
+    mut players: Query<(
+        &PlayerId,
+        &mut PlayerState,
+        &ActionState<PlayerInput>,
+        &ControlledBy,
+    )>,
+    links: Query<(
+        &PingManager,
+        Option<&lightyear::interpolation::plugin::InterpolationDelay>,
+    )>,
 ) {
-    for (id, mut state, input) in &mut players {
+    for (id, mut state, input, control) in &mut players {
         let was_alive = state.death.is_none();
         let previous_shot = state.weapon.shot;
         movement::step(&mut state, &input.0);
@@ -192,7 +212,14 @@ fn simulate(
             round.record_death(id.0, None);
         }
         if state.weapon.shot != previous_shot {
-            commands.spawn(Projectile::from_shot(id.0, &state, &input.0));
+            let lag = links
+                .get(control.owner)
+                .ok()
+                .map_or(0.0, |(ping, delay)| history::validated_delay(ping, delay));
+            commands.spawn((
+                Projectile::from_shot(id.0, &state, &input.0),
+                history::ProjectileLag(lag),
+            ));
         }
     }
 }

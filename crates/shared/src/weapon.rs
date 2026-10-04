@@ -59,8 +59,8 @@ impl Projectile {
 
 impl Ease for Projectile {
     fn interpolating_curve_unbounded(start: Self, end: Self) -> impl Curve<Self> {
-        FunctionCurve::new(Interval::UNIT, move |t| Self {
-            position: start.position.lerp(end.position, t),
+        FunctionCurve::new(Interval::UNIT, move |t: f32| Self {
+            position: start.position.lerp(end.position, t.clamp(0.0, 1.0)),
             remaining_ticks: if t >= 1.0 {
                 end.remaining_ticks
             } else {
@@ -85,6 +85,34 @@ pub fn trace<'a>(
     delta: Vec3,
     players: impl IntoIterator<Item = (u64, &'a PlayerState)>,
 ) -> Option<(f32, Impact)> {
+    trace_moving(
+        world,
+        projectile,
+        delta,
+        players
+            .into_iter()
+            .filter(|(_, p)| p.death.is_none())
+            .map(|(id, p)| (id, p.position, Vec3::ZERO)),
+    )
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ShotImpact {
+    pub owner: u64,
+    pub shot: u16,
+    pub tick: u16,
+    pub position: Vec3,
+    pub normal: Vec3,
+    /// Only populated after the server actually applied damage.
+    pub victim: Option<u64>,
+}
+
+pub fn trace_moving(
+    world: &CollisionWorld,
+    projectile: &Projectile,
+    delta: Vec3,
+    players: impl IntoIterator<Item = (u64, Vec3, Vec3)>,
+) -> Option<(f32, Impact)> {
     let mut first = world
         .sweep_sphere(projectile.position, delta, PROJECTILE_RADIUS)
         .map(|fraction| (fraction, Impact::Wall));
@@ -92,14 +120,14 @@ pub fn trace<'a>(
         arena::PLAYER_HEIGHT / 2.0 - arena::PLAYER_RADIUS,
         arena::PLAYER_RADIUS,
     );
-    for (id, player) in players {
-        if id == projectile.owner || player.death.is_some() {
+    for (id, position, movement) in players {
+        if id == projectile.owner {
             continue;
         }
-        let center = player.position + Vec3::Y * (arena::PLAYER_HEIGHT / 2.0);
+        let center = position + Vec3::Y * (arena::PLAYER_HEIGHT / 2.0);
         let hit = cast_shapes(
             &Isometry3::translation(center.x, center.y, center.z),
-            &Vector3::zeros(),
+            &Vector3::new(movement.x, movement.y, movement.z),
             &capsule,
             &Isometry3::translation(
                 projectile.position.x,

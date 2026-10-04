@@ -5,7 +5,7 @@ use bevy::{
     prelude::*,
     window::{CursorOptions, PrimaryWindow},
 };
-use hookrunner_client::{NetworkStats, Session};
+use hookrunner_client::{NetworkPresentation, NetworkStats, PresentationPosition, Session};
 use hookrunner_shared::{
     PlayerId, PlayerInput, PlayerState, arena, level, movement, player_color::PlayerColor,
 };
@@ -37,7 +37,8 @@ impl Plugin for ViewPlugin {
                     update_hud,
                 )
                     .chain()
-                    .after(InterpolationSystems::Interpolate),
+                    .after(InterpolationSystems::Interpolate)
+                    .after(NetworkPresentation),
             );
     }
 }
@@ -57,7 +58,7 @@ pub(crate) struct PlayerCamera;
 #[derive(Component)]
 struct Hud;
 #[derive(Component)]
-struct Crosshair;
+pub(crate) struct Crosshair;
 
 fn build_scene(mut commands: Commands) {
     commands.spawn((
@@ -214,12 +215,21 @@ fn sync_bodies(mut players: Query<(&PlayerState, &mut Transform), With<PlayerVis
 
 fn follow_camera(
     look: Res<Look>,
-    mut local: Query<(&PlayerState, &mut Visibility), With<Predicted>>,
+    mut local: Query<
+        (&PlayerState, Option<&PresentationPosition>, &mut Visibility),
+        With<Predicted>,
+    >,
     mut camera: Single<&mut Transform, (With<PlayerCamera>, Without<PlayerState>)>,
     mut crosshair: Single<&mut Node, With<Crosshair>>,
 ) {
-    if let Ok((state, mut body)) = local.single_mut() {
-        let eye = state.position + Vec3::Y * arena::EYE_HEIGHT;
+    if let Ok((state, presentation, mut body)) = local.single_mut() {
+        let canonical_eye = state.position + Vec3::Y * arena::EYE_HEIGHT;
+        let eye = level::world().clip_camera(
+            canonical_eye,
+            presentation.map_or(state.position, |position| position.0)
+                + Vec3::Y * arena::EYE_HEIGHT,
+            0.15,
+        );
         if let Some(death) = state.death {
             // Quadratic ease-out: stop after two seconds, then hold until respawn.
             let progress = ((movement::RESPAWN_TICKS - death.remaining_ticks) as f32
