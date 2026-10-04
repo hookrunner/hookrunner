@@ -10,11 +10,9 @@ pub const BRAKING: f32 = 80.0;
 pub const JUMP_SPEED: f32 = 8.5;
 pub const MAX_AIR_JUMPS: u8 = 1;
 pub const GRAVITY: f32 = 24.0;
-pub const MAX_DASH_CHARGES: u8 = 2;
 pub const DASH_SPEED: f32 = 24.0;
 pub const DASH_UPWARD_RATIO: f32 = 1.0 / 3.0;
 pub const DASH_TICKS: u16 = (crate::TICK_HZ * 0.15) as u16;
-pub const DASH_RECHARGE_TICKS: u16 = (crate::TICK_HZ * 0.75) as u16;
 pub const RESPAWN_TICKS: u16 = (crate::TICK_HZ * 3.0) as u16;
 
 /// One simulation tick. Same function on the authoritative server and during client replay.
@@ -99,20 +97,9 @@ fn step_in_world(world: &CollisionWorld, state: &mut PlayerState, input: &Player
     .normalize_or_zero();
     let (sin, cos) = state.yaw.sin_cos();
     let wish = Vec2::new(cos * axes.x + sin * axes.y, -sin * axes.x + cos * axes.y);
-    // Restore charges sequentially, one per 0.75 seconds, even while airborne or dashing.
-    if state.dash.recharge_ticks > 0 {
-        state.dash.recharge_ticks -= 1;
-        if state.dash.recharge_ticks == 0 {
-            state.dash.charges = (state.dash.charges + 1).min(MAX_DASH_CHARGES);
-            if state.dash.charges < MAX_DASH_CHARGES {
-                state.dash.recharge_ticks = DASH_RECHARGE_TICKS;
-            }
-        }
-    }
     let dash_pressed = input.dash_press != state.dash.last_press;
     state.dash.last_press = input.dash_press;
-    if dash_pressed && state.dash.charges > 0 {
-        state.dash.charges -= 1;
+    if dash_pressed {
         state.dash.remaining_ticks = DASH_TICKS;
         let (pitch_sin, pitch_cos) = input.pitch_radians().sin_cos();
         let forward = Vec3::new(-sin * pitch_cos, pitch_sin, -cos * pitch_cos);
@@ -130,9 +117,6 @@ fn step_in_world(world: &CollisionWorld, state: &mut PlayerState, input: &Player
             .y
             .min(state.dash.direction.xz().length() * DASH_UPWARD_RATIO);
         state.dash.direction = state.dash.direction.normalize_or_zero();
-        if state.dash.recharge_ticks == 0 {
-            state.dash.recharge_ticks = DASH_RECHARGE_TICKS;
-        }
     }
     // Capture before decrementing so the final dash tick can still convert an impact.
     let dashing = state.dash.remaining_ticks > 0;

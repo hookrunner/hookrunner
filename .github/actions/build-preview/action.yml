@@ -8,13 +8,36 @@ runs:
       shell: bash
       run: rustup show
 
-    # Restore after selecting the toolchain, before installing Cargo tools.
-    # Both the PR workflow and main-branch warm-up use the same cache key.
+    - name: Configure Rust cache
+      id: cache
+      shell: bash
+      run: |
+        cargo_home="${CARGO_HOME:-$HOME/.cargo}"
+        compiler_hash=$({ rustc -vV; printf '%s\n' "${RUSTFLAGS:-}" "${CARGO_ENCODED_RUSTFLAGS:-}"; } | sha256sum | cut -d' ' -f1)
+        echo 'CARGO_INCREMENTAL=0' >> "$GITHUB_ENV"
+        {
+          echo "prefix=rust-preview-release-${RUNNER_OS}-${RUNNER_ARCH}-${compiler_hash}"
+          echo "previous=v0-rust-preview-arm64-${RUNNER_OS}-${RUNNER_ARCH,,}-"
+          echo 'paths<<CACHE_PATHS'
+          echo "$cargo_home/bin"
+          echo "$cargo_home/.crates.toml"
+          echo "$cargo_home/.crates2.json"
+          echo "$cargo_home/registry"
+          echo "$cargo_home/git"
+          echo "$GITHUB_WORKSPACE/target"
+          echo 'CACHE_PATHS'
+        } >> "$GITHUB_OUTPUT"
+
+    # Keep paths in the same order as the previous cache to reuse its artifacts.
     - name: Restore Rust dependencies and tools
-      uses: Swatinem/rust-cache@v2
+      id: rust-cache
+      uses: actions/cache/restore@v4
       with:
-        shared-key: preview-arm64
-        cache-on-failure: true
+        path: ${{ steps.cache.outputs.paths }}
+        key: ${{ steps.cache.outputs.prefix }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'crates/*/Cargo.toml', 'rust-toolchain.toml', '.cargo/config', '.cargo/config.toml', 'scripts/build-web.sh', 'scripts/build-preview.sh', '.github/actions/build-preview/action.yml') }}
+        restore-keys: |
+          ${{ steps.cache.outputs.prefix }}-
+          ${{ steps.cache.outputs.previous }}
 
     - name: Install matching wasm-bindgen if needed
       shell: bash
@@ -34,3 +57,10 @@ runs:
     - name: Build ARM64 server and browser client
       shell: bash
       run: ./scripts/build-preview.sh
+
+    - name: Save Rust dependencies and tools
+      if: steps.rust-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ steps.cache.outputs.paths }}
+        key: ${{ steps.rust-cache.outputs.cache-primary-key }}

@@ -35,7 +35,7 @@ fn main() {
         "crates/client/Cargo.toml",
         "crates/shared/src",
         "crates/server/src",
-        "crates/client/src/lib.rs",
+        "crates/client/src",
         "assets/stormkeep/built/map.json",
         "assets/stormkeep/built/collision.bin",
     ] {

@@ -66,31 +66,18 @@ impl Default for JumpState {
     }
 }
 
-/// Dash resources, direction and press history are part of rollback state.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Reflect)]
+/// Dash duration, direction and press history are part of rollback state.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Reflect, Default)]
 pub struct DashState {
-    pub charges: u8,
     pub remaining_ticks: u16,
-    pub recharge_ticks: u16,
     pub direction: Vec3,
     pub last_press: u16,
 }
 
-impl Default for DashState {
-    fn default() -> Self {
-        Self {
-            charges: crate::movement::MAX_DASH_CHARGES,
-            remaining_ticks: 0,
-            recharge_ticks: 0,
-            direction: Vec3::ZERO,
-            last_press: 0,
-        }
-    }
-}
-
 impl Ease for PlayerState {
     fn interpolating_curve_unbounded(start: Self, end: Self) -> impl Curve<Self> {
-        FunctionCurve::new(Interval::UNIT, move |t| {
+        FunctionCurve::new(Interval::UNIT, move |t: f32| {
+            let t = t.clamp(0.0, 1.0);
             if start.relocation != end.relocation {
                 return end.clone();
             }
@@ -190,6 +177,7 @@ impl Plugin for ProtocolPlugin {
         app.add_plugins(input::native::InputPlugin::<PlayerInput> {
             config: input::InputConfig {
                 send_interval: crate::TICK_DURATION,
+                lag_compensation: true,
                 ..default()
             },
         });
@@ -198,6 +186,8 @@ impl Plugin for ProtocolPlugin {
             ..default()
         })
         .add_direction(NetworkDirection::Bidirectional);
+        app.register_message::<crate::weapon::ShotImpact>()
+            .add_direction(NetworkDirection::ServerToClient);
         app.register_message::<JoinRequest>()
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<JoinRejected>()
@@ -210,6 +200,29 @@ impl Plugin for ProtocolPlugin {
             .add_linear_interpolation();
         app.register_component::<PlayerState>()
             .add_prediction()
+            .add_should_rollback(PlayerState::should_rollback)
             .add_linear_interpolation();
+    }
+}
+
+impl PlayerState {
+    pub fn should_rollback(a: &Self, b: &Self) -> bool {
+        if a.position.distance_squared(b.position) > 0.002_f32.powi(2)
+            || a.velocity.distance_squared(b.velocity) > 0.01_f32.powi(2)
+            || (a.vertical_velocity - b.vertical_velocity).abs() > 0.01
+            || (a.yaw - b.yaw).abs() > 0.0001
+            || (a.view_yaw_offset - b.view_yaw_offset).abs() > 0.0001
+            || a.dash.direction.distance_squared(b.dash.direction) > 0.0001_f32.powi(2)
+        {
+            return true;
+        }
+        let mut a = a.clone();
+        a.position = b.position;
+        a.velocity = b.velocity;
+        a.vertical_velocity = b.vertical_velocity;
+        a.yaw = b.yaw;
+        a.view_yaw_offset = b.view_yaw_offset;
+        a.dash.direction = b.dash.direction;
+        a != *b
     }
 }

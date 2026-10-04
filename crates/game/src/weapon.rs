@@ -7,11 +7,13 @@ use bevy::{
     scene::SceneInstanceReady,
     transform::helper::TransformHelper,
 };
+use hookrunner_client::{PredictedShot, PredictedShots};
 use hookrunner_shared::{
-    PlayerId, PlayerInput, PlayerState, level,
-    weapon::{self, Projectile},
+    PlayerId, PlayerState, level,
+    weapon::{self, Projectile, ShotImpact},
 };
-use lightyear::prelude::{input::native::ActionState, *};
+use lightyear::prelude::*;
+use std::collections::VecDeque;
 
 const VIEW_LAYER: usize = 1;
 const REST_POSITION: Vec3 = Vec3::new(0.23, -0.20, -0.46);
@@ -30,9 +32,12 @@ impl Plugin for WeaponPlugin {
                     animate_weapon,
                     local_shots,
                     attach_bolts,
+                    receive_impacts,
+                    reconcile_bolts,
                     advance_local_bolts,
                     sync_bolts,
                     fade_impacts,
+                    hit_feedback,
                 )
                     .chain()
                     .after(InterpolationSystems::Interpolate)
@@ -53,10 +58,13 @@ pub(crate) struct WeaponAssets {
 #[derive(Resource, Default)]
 struct Feedback {
     player: Option<u64>,
-    shot: u16,
     recoil: f32,
     flash: f32,
-    pending_shot: bool,
+    pending_shots: Vec<PredictedShot>,
+    seen: VecDeque<(u64, u16, f64)>,
+    finished: VecDeque<(u64, u16, f64)>,
+    impacts: Vec<(ShotImpact, f64)>,
+    hit_flash: f32,
 }
 #[derive(Component)]
 struct ViewWeapon;
@@ -72,6 +80,9 @@ struct BoltVisual;
 struct LocalBolt {
     bolt: Projectile,
     age: f32,
+    muzzle_offset: Vec3,
+    correction: Vec3,
+    confirmed_tick: Option<Tick>,
 }
 #[derive(Component)]
 struct ImpactFlash {
@@ -242,92 +253,81 @@ impl MuzzleView<'_, '_> {
 
 fn detect_shots(
     mut feedback: ResMut<Feedback>,
+    mut shots: ResMut<PredictedShots>,
+    time: Res<Time<Real>>,
     players: Query<(&PlayerId, &PlayerState), With<Predicted>>,
 ) {
-    feedback.pending_shot = false;
+    feedback.pending_shots.clear();
+    let now = time.elapsed_secs_f64();
+    feedback.seen.retain(|(_, _, at)| now - at < 4.0);
+    feedback.finished.retain(|(_, _, at)| now - at < 4.0);
     let Ok((id, state)) = players.single() else {
         feedback.player = None;
+        shots.0.clear();
         return;
     };
     if feedback.player != Some(id.0) {
+        feedback.seen.clear();
+        feedback.finished.clear();
+        feedback.impacts.clear();
         feedback.player = Some(id.0);
-        feedback.shot = state.weapon.shot;
-        return;
     }
-    let difference = state.weapon.shot.wrapping_sub(feedback.shot);
-    // Reconciliation must not replay old muzzle flashes.
-    if difference == 0 || difference >= 32768 {
-        return;
+    for shot in shots.0.drain(..) {
+        if shot.bolt.owner != id.0
+            || feedback
+                .seen
+                .iter()
+                .any(|(owner, number, _)| *owner == id.0 && *number == shot.bolt.shot)
+        {
+            continue;
+        }
+        feedback.seen.push_back((id.0, shot.bolt.shot, now));
+        if state.death.is_none() {
+            feedback.pending_shots.push(shot);
+            feedback.recoil = 1.0;
+            feedback.flash = 0.07;
+        }
     }
-    feedback.shot = state.weapon.shot;
-    if state.death.is_some() {
-        return;
-    }
-    feedback.pending_shot = true;
-    feedback.recoil = 1.;
-    feedback.flash = 0.07;
 }
 
 fn local_shots(
     mut commands: Commands,
     assets: Res<WeaponAssets>,
-    feedback: Res<Feedback>,
+    mut feedback: ResMut<Feedback>,
+    timeline: Res<LocalTimeline>,
     muzzle: MuzzleView,
-    targets: Query<(&PlayerId, &PlayerState)>,
-    players: Query<(&PlayerId, &PlayerState, &ActionState<PlayerInput>), With<Predicted>>,
 ) {
-    if !feedback.pending_shot {
-        return;
+    let geometry = muzzle.shot_geometry();
+    for shot in feedback.pending_shots.drain(..) {
+        let mut bolt = shot.bolt;
+        let age = ((timeline.tick() - shot.tick) as f32).max(0.0)
+            * hookrunner_shared::TICK_DURATION.as_secs_f32();
+        if age >= 2.0 {
+            continue;
+        }
+        let muzzle_offset = geometry.map_or(Vec3::ZERO, |(muzzle, _, _)| muzzle - bolt.origin);
+        let advance = bolt.direction * weapon::PROJECTILE_SPEED * age;
+        if level::world()
+            .sweep_sphere(bolt.position, advance, weapon::PROJECTILE_RADIUS)
+            .is_some()
+        {
+            continue;
+        }
+        bolt.position += advance;
+        commands
+            .spawn((
+                LocalBolt {
+                    bolt,
+                    age,
+                    muzzle_offset,
+                    correction: Vec3::ZERO,
+                    confirmed_tick: None,
+                },
+                Transform::default(),
+                Visibility::Inherited,
+            ))
+            .with_children(|parent| beam_children(parent, &assets));
     }
-    let Ok((id, state, input)) = players.single() else {
-        return;
-    };
-    // animate_weapon ran first, so the socket matches the pose drawn this frame.
-    let Some((muzzle, eye, direction)) = muzzle.shot_geometry() else {
-        return;
-    };
-    let mut bolt = Projectile::from_shot(id.0, state, &input.0);
-    bolt.origin = eye;
-    bolt.position = eye;
-    bolt.direction = direction;
-    // Pick the reticle target first, then send the visible bolt from the barrel
-    // to that point. Its tail can never extend backwards into the gun.
-    let range = weapon::PROJECTILE_SPEED * 2.;
-    let fraction = weapon::trace(
-        level::world(),
-        &bolt,
-        direction * range,
-        targets.iter().map(|(id, state)| (id.0, state)),
-    )
-    .map_or(1., |(fraction, _)| fraction);
-    let target = eye + direction * range * fraction;
-    if (target - muzzle).dot(direction) <= 0. {
-        spawn_impact(&mut commands, &assets, target, -direction);
-        return;
-    }
-    // The view model can overlap walls. Never let that launch a cosmetic bolt
-    // through a wall that is between the player and the visible muzzle.
-    if let Some(fraction) =
-        level::world().sweep_sphere(eye, muzzle - eye, weapon::PROJECTILE_RADIUS)
-    {
-        spawn_impact(
-            &mut commands,
-            &assets,
-            eye + (muzzle - eye) * fraction,
-            -direction,
-        );
-        return;
-    }
-    bolt.origin = muzzle;
-    bolt.position = muzzle;
-    bolt.direction = (target - muzzle).normalize_or_zero();
-    commands
-        .spawn((
-            LocalBolt { bolt, age: 0. },
-            Transform::default(),
-            Visibility::Inherited,
-        ))
-        .with_children(|parent| beam_children(parent, &assets));
 }
 
 type UnrenderedBolt = (With<Projectile>, With<Interpolated>, Without<BoltVisual>);
@@ -353,38 +353,125 @@ fn bolt_transform(bolt: &Projectile) -> Transform {
         .with_scale(Vec3::new(1., 1., length))
 }
 
+fn receive_impacts(
+    mut commands: Commands,
+    time: Res<Time<Real>>,
+    assets: Res<WeaponAssets>,
+    mut feedback: ResMut<Feedback>,
+    mut receivers: Query<&mut MessageReceiver<ShotImpact>, With<Connected>>,
+    timelines: Query<&lightyear::interpolation::timeline::InterpolationTimeline, With<Connected>>,
+    locals: Query<(Entity, &LocalBolt)>,
+) {
+    let now = time.elapsed_secs_f64();
+    for mut receiver in &mut receivers {
+        for impact in receiver.receive() {
+            // Matching is by shot identity, including hits before the server
+            // projectile was ever replicated.
+            for (entity, local) in &locals {
+                if (local.bolt.owner, local.bolt.shot) == (impact.owner, impact.shot) {
+                    commands.entity(entity).despawn();
+                }
+            }
+            if feedback.player == Some(impact.owner) && impact.victim.is_some() {
+                feedback.hit_flash = 0.12;
+            }
+            feedback.impacts.push((impact, now));
+        }
+    }
+    let tick = timelines.iter().next().map(|timeline| timeline.tick());
+    let owner = feedback.player;
+    let mut completed = Vec::new();
+    feedback.impacts.retain(|(impact, received)| {
+        // Other players and their splashes use the same presentation time.
+        if owner == Some(impact.owner)
+            || tick.is_some_and(|tick| tick >= Tick(impact.tick))
+            || now - received > 0.5
+        {
+            spawn_impact(&mut commands, &assets, impact.position, impact.normal);
+            completed.push((impact.owner, impact.shot, now));
+            false
+        } else {
+            true
+        }
+    });
+    feedback.finished.extend(completed);
+}
+
+fn reconcile_bolts(
+    timeline: Res<LocalTimeline>,
+    authoritative: Query<(&Confirmed<Projectile>, &ConfirmedTick), With<Interpolated>>,
+    mut locals: Query<&mut LocalBolt>,
+) {
+    for mut local in &mut locals {
+        let Some((confirmed, tick)) = authoritative.iter().find(|(confirmed, _)| {
+            (confirmed.0.owner, confirmed.0.shot) == (local.bolt.owner, local.bolt.shot)
+        }) else {
+            continue;
+        };
+        if local.confirmed_tick == Some(tick.tick) {
+            continue;
+        }
+        let lead = ((timeline.tick() - tick.tick) as f32).clamp(0.0, 30.0)
+            * hookrunner_shared::TICK_DURATION.as_secs_f32();
+        let position =
+            confirmed.0.position + confirmed.0.direction * weapon::PROJECTILE_SPEED * lead;
+        let difference = local.bolt.position - position;
+        local.correction = if difference.length() < 3.0 {
+            local.correction + difference
+        } else {
+            Vec3::ZERO
+        };
+        local.bolt = confirmed.0.clone();
+        local.bolt.position = position;
+        local.age = (weapon::PROJECTILE_LIFETIME_TICKS - local.bolt.remaining_ticks) as f32
+            * hookrunner_shared::TICK_DURATION.as_secs_f32()
+            + lead;
+        local.confirmed_tick = Some(tick.tick);
+    }
+}
+
 fn advance_local_bolts(
     mut commands: Commands,
     time: Res<Time>,
-    assets: Res<WeaponAssets>,
     mut bolts: Query<(Entity, &mut LocalBolt, &mut Transform)>,
-    players: Query<(&PlayerId, &PlayerState)>,
 ) {
     for (entity, mut local, mut transform) in &mut bolts {
         let delta = local.bolt.direction * weapon::PROJECTILE_SPEED * time.delta_secs();
-        if let Some((fraction, _)) = weapon::trace(
-            level::world(),
-            &local.bolt,
-            delta,
-            players.iter().map(|(id, state)| (id.0, state)),
-        ) {
-            spawn_impact(
-                &mut commands,
-                &assets,
-                local.bolt.position + delta * fraction,
-                -local.bolt.direction,
-            );
+        // Predicted wall occlusion is cosmetic. Player hits and impact splashes
+        // are exclusively confirmed by the server.
+        if level::world()
+            .sweep_sphere(local.bolt.position, delta, weapon::PROJECTILE_RADIUS)
+            .is_some()
+        {
             commands.entity(entity).despawn();
             continue;
         }
         local.bolt.position += delta;
         local.age += time.delta_secs();
-        if local.age >= 2. {
+        local.correction *= (-35.0 * time.delta_secs()).exp();
+        if local.age >= 2.0 {
             commands.entity(entity).despawn();
             continue;
         }
+        let muzzle_weight =
+            (1.0 - local.bolt.position.distance(local.bolt.origin) / 4.0).clamp(0.0, 1.0);
+        let offset = local.correction + local.muzzle_offset * muzzle_weight;
         *transform = bolt_transform(&local.bolt);
+        transform.translation += offset;
     }
+}
+
+fn hit_feedback(
+    time: Res<Time>,
+    mut feedback: ResMut<Feedback>,
+    mut crosshair: Single<&mut BackgroundColor, With<crate::view::Crosshair>>,
+) {
+    crosshair.0 = if feedback.hit_flash > 0.0 {
+        Color::srgb(0.45, 0.85, 1.0)
+    } else {
+        Color::WHITE
+    };
+    feedback.hit_flash = (feedback.hit_flash - time.delta_secs()).max(0.0);
 }
 
 fn sync_bolts(
@@ -392,7 +479,16 @@ fn sync_bolts(
     mut bolts: Query<(&Projectile, &mut Transform, &mut Visibility), With<BoltVisual>>,
 ) {
     for (bolt, mut transform, mut visibility) in &mut bolts {
-        *visibility = if feedback.player == Some(bolt.owner) {
+        *visibility = if (feedback.player == Some(bolt.owner)
+            && feedback
+                .seen
+                .iter()
+                .any(|(owner, shot, _)| (*owner, *shot) == (bolt.owner, bolt.shot)))
+            || feedback
+                .finished
+                .iter()
+                .any(|(owner, shot, _)| (*owner, *shot) == (bolt.owner, bolt.shot))
+        {
             Visibility::Hidden
         } else {
             Visibility::Inherited

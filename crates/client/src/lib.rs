@@ -1,3 +1,4 @@
+mod timing;
 use bevy::prelude::*;
 use hookrunner_shared::{
     PlayerId, PlayerInput, PlayerState, ProtocolPlugin, TICK_DURATION, movement,
@@ -5,6 +6,7 @@ use hookrunner_shared::{
 };
 use lightyear::interpolation::timeline::InterpolationConfig;
 use lightyear::prelude::{client::*, input::native::*, *};
+pub use timing::{NetworkPresentation, PresentationPosition};
 
 #[derive(Resource, Clone)]
 pub struct ServerUrl(pub String);
@@ -26,6 +28,8 @@ impl Plugin for GameNetworkingPlugin {
         .add_plugins(ProtocolPlugin)
         .init_resource::<NetworkStats>()
         .init_resource::<Session>()
+        .init_resource::<PredictedShots>()
+        .add_plugins(timing::TimingPlugin)
         .add_observer(join_game)
         .add_systems(Startup, start_lobby)
         .add_systems(Update, (send_join, update_session, maintain_lobby).chain())
@@ -120,12 +124,13 @@ fn open_connection(commands: &mut Commands, url: &ServerUrl, session: &mut Sessi
             ReplicationReceiver::default(),
             PredictionManager::default(),
             InterpolationConfig {
-                // Buffer one and a half 120 Hz snapshots (~12.5 ms), plus the
-                // clock synchronizer's adaptive jitter allowance.
-                send_interval_ratio: 1.5,
+                // Updated from measured RTT, jitter, arrival gaps and render cadence.
+                send_interval_ratio: 2.0,
                 sync: SyncConfig {
                     jitter_margin: std::time::Duration::from_millis(1),
                     error_margin: 0.25,
+                    max_error_margin: 30.0,
+                    speedup_factor: 1.25,
                     ..default()
                 },
                 ..default()
@@ -266,9 +271,31 @@ fn attach_input(mut commands: Commands, players: Query<Entity, LocalPlayerWithou
     }
 }
 
-fn predict(mut players: Query<(&mut PlayerState, &ActionState<PlayerInput>), With<Predicted>>) {
-    for (mut state, input) in &mut players {
+#[derive(Resource, Default)]
+pub struct PredictedShots(pub Vec<PredictedShot>);
+
+pub struct PredictedShot {
+    pub bolt: hookrunner_shared::weapon::Projectile,
+    pub tick: Tick,
+}
+
+fn predict(
+    timeline: Res<LocalTimeline>,
+    mut shots: ResMut<PredictedShots>,
+    mut players: Query<(&PlayerId, &mut PlayerState, &ActionState<PlayerInput>), With<Predicted>>,
+) {
+    for (id, mut state, input) in &mut players {
+        let previous = state.weapon.shot;
         movement::step(&mut state, &input.0);
+        if state.weapon.shot != previous {
+            if shots.0.len() >= 256 {
+                shots.0.drain(..128);
+            }
+            shots.0.push(PredictedShot {
+                bolt: hookrunner_shared::weapon::Projectile::from_shot(id.0, &state, &input.0),
+                tick: timeline.tick(),
+            });
+        }
     }
 }
 
