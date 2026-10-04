@@ -3,7 +3,7 @@ use bevy::{prelude::*, transform::TransformSystems, window::PrimaryWindow};
 use hookrunner_client::Session;
 use hookrunner_shared::{
     PlayerId, PlayerState, arena, health::MAX_HEALTH, level, player_color::PlayerColor,
-    protocol::PlayerName,
+    powerups::MAX_SHIELD, protocol::PlayerName,
 };
 use lightyear::prelude::Predicted;
 use std::collections::HashMap;
@@ -26,14 +26,18 @@ struct HealthText {
 
 #[derive(Component)]
 struct HealthBar(Entity);
+#[derive(Component)]
+struct ShieldBar(Entity);
+#[derive(Component)]
+struct ShieldTrack(Entity);
 
 fn plate_scale(distance: f32) -> f32 {
     (10.0 / distance.max(f32::EPSILON)).max(0.32)
 }
 
-fn plate_top(anchor_y: f32, scale: f32) -> f32 {
+fn plate_top(anchor_y: f32, scale: f32, shield: bool) -> f32 {
     // UiTransform scales around the label center. Keep its lower edge near the head.
-    anchor_y - 19.0 * (1.0 + scale) - 18.0 * scale
+    anchor_y - 19.0 * (1.0 + scale) - (18.0 + if shield { 8.0 } else { 0.0 }) * scale
 }
 
 fn sync(
@@ -48,9 +52,20 @@ fn sync(
         (Entity, &PlayerName, &PlayerColor, &PlayerState),
         (With<PlayerId>, Without<Predicted>),
     >,
-    mut labels: Query<(Entity, &Nameplate, &mut Node, &mut UiTransform), Without<HealthBar>>,
+    mut labels: Query<
+        (Entity, &Nameplate, &mut Node, &mut UiTransform),
+        (Without<HealthBar>, Without<ShieldBar>, Without<ShieldTrack>),
+    >,
     mut health_texts: Query<(&mut HealthText, &mut Text)>,
-    mut health_bars: Query<(&HealthBar, &mut Node), Without<Nameplate>>,
+    mut bars: Query<
+        (
+            Option<&HealthBar>,
+            Option<&ShieldBar>,
+            Option<&ShieldTrack>,
+            &mut Node,
+        ),
+        Or<(With<HealthBar>, With<ShieldBar>, With<ShieldTrack>)>,
+    >,
 ) {
     *elapsed += time.delta_secs();
     let check_walls = *elapsed >= 0.1;
@@ -93,7 +108,7 @@ fn sync(
             };
             if let Some(point) = screen {
                 node.left = px(point.x - 110.0);
-                node.top = px(plate_top(point.y, scale));
+                node.top = px(plate_top(point.y, scale, state.shield > 0));
                 transform.scale = Vec2::splat(scale);
             }
             for (mut label, mut text) in &mut health_texts {
@@ -106,14 +121,19 @@ fn sync(
                     break;
                 }
             }
-            for (owner, mut bar) in &mut health_bars {
-                if owner.0 == entity {
-                    let width =
+            for (health, shield, track, mut node) in &mut bars {
+                if health.is_some_and(|bar| bar.0 == entity) {
+                    node.width =
                         percent(100.0 * state.health.0.min(MAX_HEALTH) as f32 / MAX_HEALTH as f32);
-                    if bar.width != width {
-                        bar.width = width;
-                    }
-                    break;
+                } else if shield.is_some_and(|bar| bar.0 == entity) {
+                    node.width =
+                        percent(100.0 * state.shield.min(MAX_SHIELD) as f32 / MAX_SHIELD as f32);
+                } else if track.is_some_and(|bar| bar.0 == entity) {
+                    node.display = if state.shield > 0 {
+                        Display::Flex
+                    } else {
+                        Display::None
+                    };
                 }
             }
         } else {
@@ -131,7 +151,7 @@ fn sync(
                             Display::None
                         },
                         left: px(position.x - 110.0),
-                        top: px(plate_top(position.y, scale)),
+                        top: px(plate_top(position.y, scale, state.shield > 0)),
                         width: px(220.0),
                         flex_direction: FlexDirection::Column,
                         align_items: AlignItems::Center,
@@ -167,6 +187,35 @@ fn sync(
                                     ..default()
                                 },
                                 BackgroundColor(Color::srgb(r, g, b)),
+                            ));
+                        });
+                    plate
+                        .spawn((
+                            ShieldTrack(entity),
+                            Node {
+                                display: if state.shield > 0 {
+                                    Display::Flex
+                                } else {
+                                    Display::None
+                                },
+                                width: px(96.0),
+                                height: px(5.0),
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgba(0.02, 0.08, 0.12, 0.9)),
+                        ))
+                        .with_children(|track| {
+                            track.spawn((
+                                ShieldBar(entity),
+                                Node {
+                                    width: percent(
+                                        100.0 * state.shield.min(MAX_SHIELD) as f32
+                                            / MAX_SHIELD as f32,
+                                    ),
+                                    height: percent(100.0),
+                                    ..default()
+                                },
+                                BackgroundColor(Color::srgb(0.25, 0.85, 1.0)),
                             ));
                         });
                     plate.spawn((

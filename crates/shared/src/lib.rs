@@ -6,6 +6,7 @@ pub mod match_state;
 pub mod movement;
 pub mod nickname;
 pub mod player_color;
+pub mod powerups;
 pub mod protocol;
 pub mod weapon;
 

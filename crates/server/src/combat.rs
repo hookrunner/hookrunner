@@ -40,11 +40,7 @@ pub fn advance_projectiles(
             if let Impact::Player(victim) = impact {
                 for (id, mut state, input) in &mut players {
                     if id.0 == victim && state.death.is_none() {
-                        if health::apply_damage(
-                            &mut state,
-                            weapon::PROJECTILE_DAMAGE,
-                            input.0.pitch_radians(),
-                        ) {
+                        if health::apply_damage(&mut state, bolt.damage, input.0.pitch_radians()) {
                             round.record_death(victim, Some(bolt.owner));
                         }
                         break;

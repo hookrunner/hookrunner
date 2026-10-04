@@ -18,6 +18,7 @@ const WALKABLE_Y: f32 = 0.65;
 pub struct MapData {
     pub name: String,
     pub spawns: Vec<Spawn>,
+    pub pickup_spawns: Vec<Vec3>,
     pub triggers: Vec<Trigger>,
     pub lightmaps: Vec<String>,
     pub sky: String,
@@ -110,6 +111,27 @@ pub fn world() -> &'static CollisionWorld {
             .collect();
         reader.finish();
         CollisionWorld::new(vertices, indices)
+    })
+}
+
+/// Keep a small, stable set of map-authored item locations for pickups and
+/// their floor markers. Nearby Quake item entities count as one location.
+pub fn pickup_slots() -> &'static [Vec3] {
+    static SLOTS: OnceLock<Vec<Vec3>> = OnceLock::new();
+    SLOTS.get_or_init(|| {
+        let mut slots: Vec<Vec3> = Vec::new();
+        for &raw in &data().pickup_spawns {
+            let Some(feet) = world().ground(raw + Vec3::Y, 3.0) else {
+                continue;
+            };
+            if slots
+                .iter()
+                .all(|other| other.distance_squared(feet) >= 5.0 * 5.0)
+            {
+                slots.push(feet);
+            }
+        }
+        slots
     })
 }
 

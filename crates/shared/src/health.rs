@@ -18,7 +18,9 @@ pub fn apply_damage(state: &mut PlayerState, amount: u16, pitch: f32) -> bool {
     if state.match_paused || state.death.is_some() || amount == 0 {
         return false;
     }
-    state.health.0 = state.health.0.saturating_sub(amount);
+    let absorbed = amount.min(state.shield);
+    state.shield -= absorbed;
+    state.health.0 = state.health.0.saturating_sub(amount - absorbed);
     if state.health.0 == 0 {
         movement::kill(state, pitch);
         true
