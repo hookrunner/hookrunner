@@ -7,7 +7,7 @@ use bevy::{
 };
 use hookrunner_client::{NetworkPresentation, NetworkStats, PresentationPosition, Session};
 use hookrunner_shared::{
-    PlayerId, PlayerInput, PlayerState, arena, level, movement, player_color::PlayerColor,
+    PlayerId, PlayerInput, PlayerState, arena, level, player_color::PlayerColor,
 };
 use lightyear::prelude::{client::input::InputSystems, input::native::*, *};
 
@@ -22,8 +22,16 @@ impl Plugin for ViewPlugin {
             .insert_resource(ClearColor(Color::srgb(0.055, 0.07, 0.095)))
             .add_systems(Startup, build_scene)
             .add_systems(Startup, crate::map::build_map)
-            .add_systems(Update, crate::map::finish_loading)
-            .add_systems(PreUpdate, look_input.after(bevy::input::InputSystems))
+            .add_systems(
+                Update,
+                (crate::map::finish_loading, crate::map::tune_lighting),
+            )
+            .add_systems(
+                PreUpdate,
+                look_input
+                    .after(bevy::input::InputSystems)
+                    .after(crate::debug_menu::MenuInput),
+            )
             .add_systems(
                 FixedPreUpdate,
                 buffer_input.in_set(InputSystems::WriteClientInputs),
@@ -33,6 +41,7 @@ impl Plugin for ViewPlugin {
                 (
                     attach_visuals,
                     sync_bodies,
+                    sync_shapes,
                     follow_camera.in_set(CameraUpdated),
                     update_hud,
                 )
@@ -53,6 +62,13 @@ pub(crate) struct Look {
 }
 #[derive(Component)]
 struct PlayerVisual;
+#[derive(Component)]
+struct BodyShape {
+    radius: f32,
+    height: f32,
+}
+#[derive(Component)]
+struct Visor;
 #[derive(Component)]
 pub(crate) struct PlayerCamera;
 #[derive(Component)]
@@ -76,8 +92,11 @@ fn build_scene(mut commands: Commands) {
             fov: 90.0_f32.to_radians(),
             ..default()
         }),
-        Transform::from_translation(arena::spawn(0).position + Vec3::Y * arena::EYE_HEIGHT)
-            .with_rotation(Quat::from_rotation_y(arena::spawn(0).yaw)),
+        Transform::from_translation(
+            arena::spawn(0, default()).position
+                + Vec3::Y * hookrunner_shared::tuning::SimulationTuning::default().eye_height,
+        )
+        .with_rotation(Quat::from_rotation_y(arena::spawn(0, default()).yaw)),
         PlayerCamera,
         Msaa::Sample4,
     ));
@@ -114,11 +133,11 @@ type PlayerWithoutVisual = (With<PlayerId>, Without<PlayerVisual>);
 
 fn attach_visuals(
     mut commands: Commands,
-    players: Query<(Entity, Has<Predicted>, &PlayerColor), PlayerWithoutVisual>,
+    players: Query<(Entity, Has<Predicted>, &PlayerColor, &PlayerState), PlayerWithoutVisual>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    for (entity, local, player_color) in &players {
+    for (entity, local, player_color, state) in &players {
         commands.entity(entity).insert((
             PlayerVisual,
             Transform::default(),
@@ -143,14 +162,19 @@ fn attach_visuals(
         commands.entity(entity).with_children(|parent| {
             parent.spawn((
                 Mesh3d(meshes.add(Capsule3d::new(
-                    arena::PLAYER_RADIUS,
-                    arena::PLAYER_HEIGHT - 2.0 * arena::PLAYER_RADIUS,
+                    state.tuning.player_radius,
+                    state.tuning.player_height - 2.0 * state.tuning.player_radius,
                 ))),
+                BodyShape {
+                    radius: state.tuning.player_radius,
+                    height: state.tuning.player_height,
+                },
                 MeshMaterial3d(color),
-                Transform::from_xyz(0.0, arena::PLAYER_HEIGHT / 2.0, 0.0),
+                Transform::from_xyz(0.0, state.tuning.player_height / 2.0, 0.0),
             ));
             parent.spawn((
                 Mesh3d(meshes.add(Cuboid::new(0.55, 0.18, 0.16))),
+                Visor,
                 MeshMaterial3d(visor),
                 Transform::from_xyz(0.0, 1.45, -0.34),
             ));
@@ -160,6 +184,8 @@ fn attach_visuals(
 
 pub(crate) fn look_input(
     mut look: ResMut<Look>,
+    settings: Res<hookrunner_client::tuning::TuningClient>,
+    menu: Res<crate::debug_menu::DebugMenu>,
     session: Res<Session>,
     motion: Res<AccumulatedMouseMotion>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -167,6 +193,7 @@ pub(crate) fn look_input(
     local: Query<&PlayerState, With<Predicted>>,
 ) {
     look.locked = session.is_playing()
+        && !menu.open
         && !local.iter().any(|p| p.match_paused)
         && window.0.focused
         && crate::platform::pointer_locked(window.1);
@@ -178,8 +205,11 @@ pub(crate) fn look_input(
             look.dash_press = look.dash_press.wrapping_add(1);
         }
         if !local.iter().any(|state| state.death.is_some()) {
-            look.yaw = (look.yaw - motion.delta.x * 0.002).rem_euclid(std::f32::consts::TAU);
-            look.pitch = (look.pitch - motion.delta.y * 0.002)
+            look.yaw = (look.yaw
+                - motion.delta.x * settings.values().presentation.mouse_sensitivity)
+                .rem_euclid(std::f32::consts::TAU);
+            look.pitch = (look.pitch
+                - motion.delta.y * settings.values().presentation.mouse_sensitivity)
                 .clamp(-PlayerInput::MAX_PITCH, PlayerInput::MAX_PITCH);
         }
     }
@@ -213,41 +243,102 @@ fn sync_bodies(mut players: Query<(&PlayerState, &mut Transform), With<PlayerVis
     }
 }
 
+fn sync_shapes(
+    players: Query<&PlayerState>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut bodies: Query<(&ChildOf, &mut BodyShape, &mut Mesh3d, &mut Transform)>,
+    mut visors: Query<(&ChildOf, &mut Transform), (With<Visor>, Without<BodyShape>)>,
+) {
+    for (parent, mut shape, mut mesh, mut transform) in &mut bodies {
+        let Ok(state) = players.get(parent.parent()) else {
+            continue;
+        };
+        let radius = state.tuning.player_radius;
+        let height = state.tuning.player_height;
+        if shape.radius != radius || shape.height != height {
+            mesh.0 = meshes.add(Capsule3d::new(radius, height - 2.0 * radius));
+            transform.translation.y = height / 2.0;
+            shape.radius = radius;
+            shape.height = height;
+        }
+    }
+    for (parent, mut transform) in &mut visors {
+        let Ok(state) = players.get(parent.parent()) else {
+            continue;
+        };
+        transform.scale = Vec3::new(
+            state.tuning.player_radius / 0.4,
+            state.tuning.player_height / 1.8,
+            state.tuning.player_radius / 0.4,
+        );
+        transform.translation = Vec3::new(0.0, 1.45 * transform.scale.y, -0.34 * transform.scale.z);
+    }
+}
+
 fn follow_camera(
+    settings: Res<hookrunner_client::tuning::TuningClient>,
     look: Res<Look>,
+    menu: Res<crate::debug_menu::DebugMenu>,
     mut local: Query<
         (&PlayerState, Option<&PresentationPosition>, &mut Visibility),
         With<Predicted>,
     >,
-    mut camera: Single<&mut Transform, (With<PlayerCamera>, Without<PlayerState>)>,
+    mut camera: Single<
+        (&mut Transform, &mut Projection),
+        (With<PlayerCamera>, Without<PlayerState>),
+    >,
     mut crosshair: Single<&mut Node, With<Crosshair>>,
 ) {
+    let tuning = settings.values().presentation;
+    let (camera, projection) = &mut *camera;
+    if let Projection::Perspective(projection) = &mut **projection {
+        projection.fov = tuning.camera_fov.to_radians();
+    }
+    crosshair.width = px(tuning.crosshair_size);
+    crosshair.height = px(tuning.crosshair_size);
     if let Ok((state, presentation, mut body)) = local.single_mut() {
-        let canonical_eye = state.position + Vec3::Y * arena::EYE_HEIGHT;
+        let canonical_eye = state.position + Vec3::Y * state.tuning.eye_height;
         let eye = level::world().clip_camera(
             canonical_eye,
             presentation.map_or(state.position, |position| position.0)
-                + Vec3::Y * arena::EYE_HEIGHT,
-            0.15,
+                + Vec3::Y * state.tuning.eye_height,
+            tuning.camera_collision_radius,
         );
         if let Some(death) = state.death {
-            // Quadratic ease-out: stop after two seconds, then hold until respawn.
-            let progress = ((movement::RESPAWN_TICKS - death.remaining_ticks) as f32
-                / (2.0 * hookrunner_shared::TICK_HZ as f32))
-                .clamp(0.0, 1.0);
+            // Quadratic ease-out, then hold until respawn.
+            let progress = if tuning.death_camera_time == 0.0 {
+                1.0
+            } else {
+                (death.total_ticks.saturating_sub(death.remaining_ticks) as f32
+                    / (tuning.death_camera_time.max(f32::EPSILON)
+                        * hookrunner_shared::TICK_HZ as f32))
+                    .clamp(0.0, 1.0)
+            };
             let eased = 1.0 - (1.0 - progress).powi(2);
-            let end = eye + Quat::from_rotation_y(state.yaw) * Vec3::new(0.0, 1.0, 4.0);
-            camera.translation = level::world().clip_camera(eye, eye.lerp(end, eased), 0.15);
+            let end = eye
+                + Quat::from_rotation_y(state.yaw)
+                    * Vec3::new(
+                        0.0,
+                        tuning.death_camera_height,
+                        tuning.death_camera_distance,
+                    );
+            camera.translation = level::world().clip_camera(
+                eye,
+                eye.lerp(end, eased),
+                tuning.camera_collision_radius,
+            );
             let start_rotation = Quat::from_euler(EulerRot::YXZ, state.yaw, death.pitch, 0.0);
-            let end_rotation = Transform::from_translation(end)
-                .looking_at(
-                    state.position + Vec3::Y * (arena::PLAYER_HEIGHT / 2.0),
-                    Vec3::Y,
-                )
-                .rotation;
+            let target = state.position + Vec3::Y * (state.tuning.player_height / 2.0);
+            let end_rotation = if end.distance_squared(target) > 1e-8 {
+                Transform::from_translation(end)
+                    .looking_at(target, Vec3::Y)
+                    .rotation
+            } else {
+                start_rotation
+            };
             camera.rotation = start_rotation.slerp(end_rotation, eased);
             // Reveal the body after the camera has cleared its head/near plane.
-            *body = if camera.translation.distance(eye) > arena::PLAYER_RADIUS + 0.2 {
+            *body = if camera.translation.distance(eye) > state.tuning.player_radius + 0.2 {
                 Visibility::Inherited
             } else {
                 Visibility::Hidden
@@ -256,7 +347,11 @@ fn follow_camera(
             return;
         }
         *body = Visibility::Hidden;
-        crosshair.display = Display::Flex;
+        crosshair.display = if menu.open {
+            Display::None
+        } else {
+            Display::Flex
+        };
         camera.translation = eye;
         camera.rotation = Quat::from_euler(
             EulerRot::YXZ,
@@ -302,11 +397,7 @@ fn update_hud(
         if let Some((_, state, color)) = players.iter().next() {
             spans.push((session.nickname.clone(), Some(*color)));
             spans.push((
-                format!(
-                    "\nHP: {} / {}",
-                    state.health.0,
-                    hookrunner_shared::health::MAX_HEALTH
-                ),
+                format!("\nHP: {} / {}", state.health.0, state.tuning.max_health),
                 Some(*color),
             ));
             if let Some(death) = state.death {

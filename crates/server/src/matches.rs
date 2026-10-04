@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use hookrunner_shared::{
     PlayerId, PlayerInput, PlayerState,
-    match_state::{MATCH_SECONDS, MatchState, RESULTS_SECONDS, ScoreRow},
+    match_state::{MatchState, ScoreRow},
     movement,
     player_color::PlayerColor,
     protocol::PlayerName,
@@ -14,12 +14,18 @@ use std::time::Duration;
 pub struct MatchClock {
     pub remaining: Duration,
     feed_fraction: Duration,
+    phase_duration: Duration,
 }
 impl Default for MatchClock {
     fn default() -> Self {
         Self {
-            remaining: Duration::from_secs(MATCH_SECONDS.into()),
+            remaining: Duration::from_secs_f32(
+                hookrunner_shared::tuning::MatchTuning::default().match_duration,
+            ),
             feed_fraction: Duration::ZERO,
+            phase_duration: Duration::from_secs_f32(
+                hookrunner_shared::tuning::MatchTuning::default().match_duration,
+            ),
         }
     }
 }
@@ -37,6 +43,7 @@ pub fn advance(
     time: Res<Time<Real>>,
     mut clock: ResMut<MatchClock>,
     mut round: ResMut<MatchState>,
+    settings: Res<hookrunner_shared::tuning::FeatureSettings>,
     mut players: Query<(
         &PlayerId,
         &PlayerName,
@@ -47,6 +54,20 @@ pub fn advance(
     bolts: Query<Entity, With<Projectile>>,
     mut commands: Commands,
 ) {
+    let rules = settings.values.rules;
+    let active_duration = Duration::from_secs_f32(rules.match_duration);
+    let results_duration = Duration::from_secs_f32(rules.results_duration);
+    let desired = if round.results {
+        results_duration
+    } else {
+        active_duration
+    };
+    if desired != clock.phase_duration {
+        let elapsed = clock.phase_duration.saturating_sub(clock.remaining);
+        clock.remaining = desired.saturating_sub(elapsed);
+        clock.phase_duration = desired;
+    }
+    round.trim_feed(rules);
     // Expire transient events on server time, including during results/empty sessions.
     clock.feed_fraction += time.delta();
     let seconds = clock.feed_fraction.as_secs();
@@ -69,12 +90,14 @@ pub fn advance(
             round.results = false;
             round.rows.clear();
             round.kill_feed.clear();
-            clock.remaining = Duration::from_secs(MATCH_SECONDS.into());
+            clock.remaining = active_duration;
+            clock.phase_duration = active_duration;
             reset = true;
             info!("Match {} started", round.number);
         } else {
             round.results = true;
-            clock.remaining = Duration::from_secs(RESULTS_SECONDS.into());
+            clock.remaining = results_duration;
+            clock.phase_duration = results_duration;
             info!("Match {} finished", round.number);
         }
         clear_bolts = true;
@@ -90,6 +113,7 @@ pub fn advance(
         }
     }
     for (id, name, color, mut player, input) in &mut players {
+        player.tuning = settings.values.simulation;
         if reset {
             movement::respawn(&mut player, &input.map(|a| a.0.clone()).unwrap_or_default());
         }

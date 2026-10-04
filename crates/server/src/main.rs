@@ -3,6 +3,7 @@ mod combat;
 mod history;
 mod loading;
 mod matches;
+mod tuning;
 
 use bevy::{app::ScheduleRunnerPlugin, prelude::*};
 use hookrunner_shared::{
@@ -33,13 +34,14 @@ fn main() {
             tick_duration: TICK_DURATION,
         })
         .add_plugins(ProtocolPlugin)
+        .add_plugins(tuning::TuningPlugin)
         .add_plugins(loading::LoadingPlugin)
         .insert_resource(BindAddress(address))
         .init_resource::<hookrunner_shared::match_state::MatchState>()
         .init_resource::<matches::MatchClock>()
         .init_resource::<history::PlayerHistory>()
         .add_systems(Startup, (start, matches::setup))
-        .add_systems(PreUpdate, matches::advance)
+        .add_systems(PreUpdate, matches::advance.after(tuning::edit))
         .add_observer(configure_link)
         .add_systems(Update, spawn_players)
         .add_observer(log_disconnect)
@@ -112,6 +114,7 @@ fn spawn_players(
     >,
     players: Query<(&PlayerState, &PlayerColor)>,
     round: Res<hookrunner_shared::match_state::MatchState>,
+    settings: Res<hookrunner_shared::tuning::FeatureSettings>,
     mut commands: Commands,
 ) {
     let mut occupied = Vec::new();
@@ -153,8 +156,12 @@ fn spawn_players(
                 });
                 continue;
             }
-            let spawn_index = arena::choose_spawn(rand::random::<u32>() as usize, &occupied);
-            let spawn = arena::spawn(spawn_index);
+            let spawn_index = arena::choose_spawn(
+                rand::random::<u32>() as usize,
+                &occupied,
+                settings.values.simulation.spawn_separation,
+            );
+            let spawn = arena::spawn(spawn_index, settings.values.simulation);
             let position = spawn.position;
             occupied.push(position);
             occupied_colors[color.0 as usize] = true;
@@ -164,6 +171,15 @@ fn spawn_players(
                 PlayerName(name.clone()),
                 color,
                 PlayerState {
+                    tuning: settings.values.simulation,
+                    health: hookrunner_shared::health::Health(
+                        settings.values.simulation.max_health as u16,
+                    ),
+                    jump: hookrunner_shared::protocol::JumpState {
+                        air_jumps_remaining: settings.values.simulation.air_jumps as u8,
+                        ..default()
+                    },
+                    dash: hookrunner_shared::protocol::DashState::new(settings.values.simulation),
                     position,
                     yaw: spawn.yaw,
                     view_yaw_offset: spawn.yaw,
@@ -193,6 +209,7 @@ fn spawn_players(
 fn simulate(
     mut commands: Commands,
     mut round: ResMut<hookrunner_shared::match_state::MatchState>,
+    settings: Res<hookrunner_shared::tuning::FeatureSettings>,
     mut players: Query<(
         &PlayerId,
         &mut PlayerState,
@@ -205,11 +222,13 @@ fn simulate(
     )>,
 ) {
     for (id, mut state, input, control) in &mut players {
+        // The settings snapshot rewinds with PlayerState on predicted clients.
+        state.tuning = settings.values.simulation;
         let was_alive = state.death.is_none();
         let previous_shot = state.weapon.shot;
         movement::step(&mut state, &input.0);
         if was_alive && state.death.is_some() {
-            round.record_death(id.0, None);
+            round.record_death(id.0, None, settings.values.rules);
         }
         if state.weapon.shot != previous_shot {
             let lag = links

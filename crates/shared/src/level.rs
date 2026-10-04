@@ -8,11 +8,9 @@ use parry3d::{
 use serde::Deserialize;
 use std::sync::OnceLock;
 
-use crate::arena::{PLAYER_HEIGHT, PLAYER_RADIUS};
+use crate::tuning::SimulationTuning;
 
-pub const STEP_HEIGHT: f32 = 0.45;
 pub const SKIN: f32 = 0.002;
-const WALKABLE_Y: f32 = 0.65;
 
 #[derive(Deserialize)]
 pub struct MapData {
@@ -60,10 +58,11 @@ pub struct Trigger {
 }
 
 impl Trigger {
-    pub fn touches(&self, feet: Vec3) -> bool {
-        let center = feet + Vec3::Y * (PLAYER_HEIGHT / 2.0);
+    pub fn touches(&self, feet: Vec3, tuning: &SimulationTuning) -> bool {
+        let center = feet + Vec3::Y * (tuning.player_height / 2.0);
         self.planes.iter().all(|&[x, y, z, distance]| {
-            let support = PLAYER_RADIUS + (PLAYER_HEIGHT / 2.0 - PLAYER_RADIUS) * y.abs();
+            let support = tuning.player_radius
+                + (tuning.player_height / 2.0 - tuning.player_radius) * y.abs();
             Vec3::new(x, y, z).dot(center) <= distance + support + SKIN
         })
     }
@@ -71,7 +70,6 @@ impl Trigger {
 
 pub struct CollisionWorld {
     mesh: TriMesh,
-    capsule: Capsule,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -186,19 +184,36 @@ impl CollisionWorld {
                 TriMeshFlags::FIX_INTERNAL_EDGES | TriMeshFlags::DELETE_DEGENERATE_TRIANGLES,
             )
             .expect("compiled map must contain valid collision triangles"),
-            capsule: Capsule::new_y(PLAYER_HEIGHT / 2.0 - PLAYER_RADIUS, PLAYER_RADIUS),
         }
     }
 
+    pub fn character(&self, tuning: SimulationTuning) -> CharacterWorld<'_> {
+        CharacterWorld {
+            world: self,
+            tuning,
+            capsule: Capsule::new_y(
+                tuning.player_height / 2.0 - tuning.player_radius,
+                tuning.player_radius,
+            ),
+        }
+    }
+}
+
+pub struct CharacterWorld<'a> {
+    world: &'a CollisionWorld,
+    tuning: SimulationTuning,
+    capsule: Capsule,
+}
+impl CharacterWorld<'_> {
     pub fn sweep(&self, feet: Vec3, delta: Vec3) -> Option<Hit> {
         if delta.length_squared() < 1e-14 {
             return None;
         }
-        let center = feet + Vec3::Y * (PLAYER_HEIGHT / 2.0);
+        let center = feet + Vec3::Y * (self.tuning.player_height / 2.0);
         cast_shapes(
             &Isometry3::identity(),
             &Vector3::zeros(),
-            &self.mesh,
+            &self.world.mesh,
             &Isometry3::translation(center.x, center.y, center.z),
             &Vector3::new(delta.x, delta.y, delta.z),
             &self.capsule,
@@ -229,19 +244,18 @@ impl CollisionWorld {
 
     pub fn ground(&self, feet: Vec3, distance: f32) -> Option<Vec3> {
         self.sweep(feet, Vec3::NEG_Y * distance)
-            .filter(|hit| hit.normal.y >= WALKABLE_Y)
+            .filter(|hit| hit.normal.y >= self.tuning.walkable_normal_y)
             .map(|hit| feet - Vec3::Y * distance * hit.fraction)
     }
 
     pub fn is_grounded(&self, feet: Vec3) -> bool {
-        self.ground(feet, 0.025).is_some()
+        self.ground(feet, self.tuning.ground_probe_distance)
+            .is_some()
     }
 
     pub fn settle_spawn(&self, spawn: Spawn) -> Spawn {
         Spawn {
-            position: self
-                .ground(spawn.position, 4.0)
-                .expect("map spawn needs a walkable floor"),
+            position: self.ground(spawn.position, 4.0).unwrap_or(spawn.position),
             ..spawn
         }
     }
@@ -267,7 +281,7 @@ impl CollisionWorld {
                 result.position += hit.normal * SKIN;
             }
             remaining *= 1.0 - hit.fraction;
-            if hit.normal.y >= WALKABLE_Y && result.velocity.y < 0.0 {
+            if hit.normal.y >= self.tuning.walkable_normal_y && result.velocity.y < 0.0 {
                 result.grounded = true;
                 result.landed = true;
             }
@@ -291,11 +305,17 @@ impl CollisionWorld {
         if grounded && velocity.y <= 0.0 && velocity.xz().length_squared() > 1e-6 {
             let requested = velocity.xz().length_squared() * dt * dt;
             let achieved = (motion.position - start).xz().length_squared();
-            if achieved + 1e-5 < requested && self.sweep(start, Vec3::Y * STEP_HEIGHT).is_none() {
-                let raised = start + Vec3::Y * STEP_HEIGHT;
+            if achieved + 1e-5 < requested
+                && self
+                    .sweep(start, Vec3::Y * self.tuning.step_height)
+                    .is_none()
+            {
+                let raised = start + Vec3::Y * self.tuning.step_height;
                 let mut stepped = self.slide(raised, velocity.with_y(0.0), dt);
-                if let Some(floor) = self.ground(stepped.position, STEP_HEIGHT + 0.03)
-                    && (floor - start).xz().length_squared() > achieved + 1e-5
+                if let Some(floor) = self.ground(
+                    stepped.position,
+                    self.tuning.step_height + self.tuning.ground_snap_distance,
+                ) && (floor - start).xz().length_squared() > achieved + 1e-5
                 {
                     stepped.position = floor;
                     stepped.velocity.y = 0.0;
@@ -307,9 +327,9 @@ impl CollisionWorld {
         }
         if grounded && velocity.y <= 0.0 {
             let distance = if velocity.xz().length_squared() > 1e-6 {
-                STEP_HEIGHT + 0.03
+                self.tuning.step_height + self.tuning.ground_snap_distance
             } else {
-                0.03
+                self.tuning.ground_snap_distance
             };
             if let Some(floor) = self.ground(motion.position, distance) {
                 motion.position = floor;
@@ -326,7 +346,7 @@ impl CollisionWorld {
     /// Stop an impact boost at a touching wall, including when the floor was hit first.
     pub fn clip_at_wall(&self, feet: Vec3, velocity: Vec3) -> Vec3 {
         if let Some(hit) = self.sweep(feet, velocity.normalize_or_zero() * 0.015)
-            && hit.normal.y < WALKABLE_Y
+            && hit.normal.y < self.tuning.walkable_normal_y
         {
             return velocity - hit.normal * velocity.dot(hit.normal).min(0.0);
         }

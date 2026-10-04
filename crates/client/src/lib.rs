@@ -1,4 +1,5 @@
 mod timing;
+pub mod tuning;
 use bevy::prelude::*;
 use hookrunner_shared::{
     PlayerId, PlayerInput, PlayerState, ProtocolPlugin, TICK_DURATION, movement,
@@ -30,6 +31,7 @@ impl Plugin for GameNetworkingPlugin {
         .init_resource::<Session>()
         .init_resource::<PredictedShots>()
         .add_plugins(timing::TimingPlugin)
+        .add_plugins(tuning::TuningPlugin)
         .add_observer(join_game)
         .add_systems(Startup, start_lobby)
         .add_systems(Update, (send_join, update_session, maintain_lobby).chain())
@@ -171,6 +173,13 @@ fn send_join(
     }
 }
 
+type SessionReplicas = Or<(
+    With<PlayerId>,
+    With<hookrunner_shared::weapon::Projectile>,
+    With<hookrunner_shared::match_state::MatchState>,
+    With<hookrunner_shared::tuning::FeatureSettings>,
+)>;
+
 pub fn update_session(
     mut commands: Commands,
     time: Res<Time<Real>>,
@@ -181,14 +190,7 @@ pub fn update_session(
     >,
     players: Query<(&PlayerName, &hookrunner_shared::player_color::PlayerColor), With<Predicted>>,
     rounds: Query<Entity, With<hookrunner_shared::match_state::MatchState>>,
-    replicas: Query<
-        Entity,
-        Or<(
-            With<PlayerId>,
-            With<hookrunner_shared::weapon::Projectile>,
-            With<hookrunner_shared::match_state::MatchState>,
-        )>,
-    >,
+    replicas: Query<Entity, SessionReplicas>,
 ) {
     let Some(entity) = session.connection else {
         return;

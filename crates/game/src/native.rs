@@ -103,17 +103,23 @@ pub fn configure(app: &mut App) {
             PreUpdate,
             capture_pointer
                 .after(bevy::input::InputSystems)
+                .after(crate::debug_menu::MenuInput)
                 .before(crate::view::look_input),
         );
 }
 
 fn capture_pointer(
     session: Res<hookrunner_client::Session>,
+    settings: Res<crate::debug_menu::DebugMenu>,
     buttons: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
     mut window: Single<(&Window, &mut CursorOptions), With<PrimaryWindow>>,
 ) {
-    if !session.is_playing() || !window.0.focused || keys.just_pressed(KeyCode::Escape) {
+    if !session.is_playing()
+        || settings.open
+        || !window.0.focused
+        || keys.just_pressed(KeyCode::Escape)
+    {
         window.1.grab_mode = CursorGrabMode::None;
         window.1.visible = true;
     } else if buttons.just_pressed(MouseButton::Left) {
@@ -134,3 +140,5 @@ pub fn finished_loading() {
 pub fn show_loading() {}
 
 pub fn set_playing(_playing: bool) {}
+
+pub fn set_debug_menu(_open: bool) {}

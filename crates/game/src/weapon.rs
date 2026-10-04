@@ -10,13 +10,13 @@ use bevy::{
 use hookrunner_client::{PredictedShot, PredictedShots};
 use hookrunner_shared::{
     PlayerId, PlayerState, level,
-    weapon::{self, Projectile, ShotImpact},
+    weapon::{Projectile, ShotImpact},
 };
 use lightyear::prelude::*;
 use std::collections::VecDeque;
 
 const VIEW_LAYER: usize = 1;
-const REST_POSITION: Vec3 = Vec3::new(0.23, -0.20, -0.46);
+
 const MUZZLE_CLEARANCE: f32 = 0.015;
 const FLASH_HALF_LENGTH: f32 = 0.055;
 
@@ -149,7 +149,7 @@ fn setup(
     commands
         .spawn((
             SceneRoot(weapon.scene.clone()),
-            Transform::from_translation(REST_POSITION),
+            Transform::from_translation(Vec3::new(0.23, -0.20, -0.46)),
             Visibility::Hidden,
             ViewWeapon,
         ))
@@ -252,6 +252,7 @@ impl MuzzleView<'_, '_> {
 }
 
 fn detect_shots(
+    settings: Res<hookrunner_client::tuning::TuningClient>,
     mut feedback: ResMut<Feedback>,
     mut shots: ResMut<PredictedShots>,
     time: Res<Time<Real>>,
@@ -285,7 +286,7 @@ fn detect_shots(
         if state.death.is_none() {
             feedback.pending_shots.push(shot);
             feedback.recoil = 1.0;
-            feedback.flash = 0.07;
+            feedback.flash = settings.values().presentation.muzzle_flash_time;
         }
     }
 }
@@ -302,13 +303,13 @@ fn local_shots(
         let mut bolt = shot.bolt;
         let age = ((timeline.tick() - shot.tick) as f32).max(0.0)
             * hookrunner_shared::TICK_DURATION.as_secs_f32();
-        if age >= 2.0 {
+        if age >= bolt.lifetime_ticks as f32 * hookrunner_shared::TICK_DURATION.as_secs_f32() {
             continue;
         }
         let muzzle_offset = geometry.map_or(Vec3::ZERO, |(muzzle, _, _)| muzzle - bolt.origin);
-        let advance = bolt.direction * weapon::PROJECTILE_SPEED * age;
+        let advance = bolt.direction * bolt.speed * age;
         if level::world()
-            .sweep_sphere(bolt.position, advance, weapon::PROJECTILE_RADIUS)
+            .sweep_sphere(bolt.position, advance, bolt.radius)
             .is_some()
         {
             continue;
@@ -345,15 +346,19 @@ fn attach_bolts(
     }
 }
 
-fn bolt_transform(bolt: &Projectile) -> Transform {
+fn bolt_transform(
+    bolt: &Projectile,
+    tuning: hookrunner_shared::tuning::PresentationTuning,
+) -> Transform {
     let distance = bolt.position.distance(bolt.origin);
-    let length = distance.clamp(0.02, weapon::PROJECTILE_LENGTH);
+    let length = distance.clamp(0.02, tuning.beam_length);
     Transform::from_translation(bolt.position - bolt.direction * length / 2.)
         .looking_to(bolt.direction, Vec3::Y)
-        .with_scale(Vec3::new(1., 1., length))
+        .with_scale(Vec3::new(tuning.beam_width, tuning.beam_width, length))
 }
 
 fn receive_impacts(
+    settings: Res<hookrunner_client::tuning::TuningClient>,
     mut commands: Commands,
     time: Res<Time<Real>>,
     assets: Res<WeaponAssets>,
@@ -373,7 +378,7 @@ fn receive_impacts(
                 }
             }
             if feedback.player == Some(impact.owner) && impact.victim.is_some() {
-                feedback.hit_flash = 0.12;
+                feedback.hit_flash = settings.values().presentation.hit_marker_time;
             }
             feedback.impacts.push((impact, now));
         }
@@ -387,7 +392,13 @@ fn receive_impacts(
             || tick.is_some_and(|tick| tick >= Tick(impact.tick))
             || now - received > 0.5
         {
-            spawn_impact(&mut commands, &assets, impact.position, impact.normal);
+            spawn_impact(
+                &mut commands,
+                &assets,
+                impact.position,
+                impact.normal,
+                settings.values().presentation,
+            );
             completed.push((impact.owner, impact.shot, now));
             false
         } else {
@@ -413,8 +424,7 @@ fn reconcile_bolts(
         }
         let lead = ((timeline.tick() - tick.tick) as f32).clamp(0.0, 30.0)
             * hookrunner_shared::TICK_DURATION.as_secs_f32();
-        let position =
-            confirmed.0.position + confirmed.0.direction * weapon::PROJECTILE_SPEED * lead;
+        let position = confirmed.0.position + confirmed.0.direction * confirmed.0.speed * lead;
         let difference = local.bolt.position - position;
         local.correction = if difference.length() < 3.0 {
             local.correction + difference
@@ -423,7 +433,10 @@ fn reconcile_bolts(
         };
         local.bolt = confirmed.0.clone();
         local.bolt.position = position;
-        local.age = (weapon::PROJECTILE_LIFETIME_TICKS - local.bolt.remaining_ticks) as f32
+        local.age = (local
+            .bolt
+            .lifetime_ticks
+            .saturating_sub(local.bolt.remaining_ticks)) as f32
             * hookrunner_shared::TICK_DURATION.as_secs_f32()
             + lead;
         local.confirmed_tick = Some(tick.tick);
@@ -431,16 +444,17 @@ fn reconcile_bolts(
 }
 
 fn advance_local_bolts(
+    settings: Res<hookrunner_client::tuning::TuningClient>,
     mut commands: Commands,
     time: Res<Time>,
     mut bolts: Query<(Entity, &mut LocalBolt, &mut Transform)>,
 ) {
     for (entity, mut local, mut transform) in &mut bolts {
-        let delta = local.bolt.direction * weapon::PROJECTILE_SPEED * time.delta_secs();
+        let delta = local.bolt.direction * local.bolt.speed * time.delta_secs();
         // Predicted wall occlusion is cosmetic. Player hits and impact splashes
         // are exclusively confirmed by the server.
         if level::world()
-            .sweep_sphere(local.bolt.position, delta, weapon::PROJECTILE_RADIUS)
+            .sweep_sphere(local.bolt.position, delta, local.bolt.radius)
             .is_some()
         {
             commands.entity(entity).despawn();
@@ -449,14 +463,18 @@ fn advance_local_bolts(
         local.bolt.position += delta;
         local.age += time.delta_secs();
         local.correction *= (-35.0 * time.delta_secs()).exp();
-        if local.age >= 2.0 {
+        if local.age
+            >= local.bolt.lifetime_ticks as f32 * hookrunner_shared::TICK_DURATION.as_secs_f32()
+        {
             commands.entity(entity).despawn();
             continue;
         }
-        let muzzle_weight =
-            (1.0 - local.bolt.position.distance(local.bolt.origin) / 4.0).clamp(0.0, 1.0);
+        let muzzle_weight = (1.0
+            - local.bolt.position.distance(local.bolt.origin)
+                / settings.values().presentation.muzzle_blend_distance)
+            .clamp(0.0, 1.0);
         let offset = local.correction + local.muzzle_offset * muzzle_weight;
-        *transform = bolt_transform(&local.bolt);
+        *transform = bolt_transform(&local.bolt, settings.values().presentation);
         transform.translation += offset;
     }
 }
@@ -475,6 +493,7 @@ fn hit_feedback(
 }
 
 fn sync_bolts(
+    settings: Res<hookrunner_client::tuning::TuningClient>,
     feedback: Res<Feedback>,
     mut bolts: Query<(&Projectile, &mut Transform, &mut Visibility), With<BoltVisual>>,
 ) {
@@ -493,38 +512,49 @@ fn sync_bolts(
         } else {
             Visibility::Inherited
         };
-        *transform = bolt_transform(bolt);
+        *transform = bolt_transform(bolt, settings.values().presentation);
     }
 }
 
 fn animate_weapon(
+    settings: Res<hookrunner_client::tuning::TuningClient>,
+    mut camera: Single<(&mut Projection, &mut AmbientLight), With<WeaponCamera>>,
     time: Res<Time>,
     mut feedback: ResMut<Feedback>,
     local: Query<&PlayerState, With<Predicted>>,
     mut gun: Single<(&mut Transform, &mut Visibility), With<ViewWeapon>>,
-    mut flashes: Query<&mut Visibility, (With<MuzzleFlash>, Without<ViewWeapon>)>,
+    mut flashes: Query<(&mut Visibility, &mut Transform), (With<MuzzleFlash>, Without<ViewWeapon>)>,
 ) {
+    let tuning = settings.values().presentation;
+    if let Projection::Perspective(projection) = &mut *camera.0 {
+        projection.fov = tuning.weapon_fov.to_radians();
+    }
+    camera.1.brightness = tuning.weapon_brightness;
     let alive = local.single().is_ok_and(|state| state.death.is_none());
     *gun.1 = if alive {
         Visibility::Inherited
     } else {
         Visibility::Hidden
     };
-    gun.0.translation = REST_POSITION + Vec3::new(0., 0.012, 0.055) * feedback.recoil;
+    gun.0.translation = Vec3::new(tuning.weapon_x, tuning.weapon_y, tuning.weapon_z)
+        + Vec3::new(0., tuning.recoil_up, tuning.recoil_back) * feedback.recoil;
     gun.0.rotation = Quat::from_euler(
         EulerRot::YXZ,
-        0.08,
-        0.025 + 0.16 * feedback.recoil,
-        -0.035 * feedback.recoil,
+        tuning.weapon_yaw,
+        tuning.weapon_pitch + tuning.recoil_pitch * feedback.recoil,
+        tuning.recoil_roll * feedback.recoil,
     );
-    for mut flash in &mut flashes {
+    for (mut flash, mut transform) in &mut flashes {
+        transform.scale = Vec3::new(0.03, 0.03, FLASH_HALF_LENGTH) * tuning.muzzle_flash_size;
+        transform.translation.z =
+            -(MUZZLE_CLEARANCE + FLASH_HALF_LENGTH * tuning.muzzle_flash_size);
         *flash = if alive && feedback.flash > 0. {
             Visibility::Inherited
         } else {
             Visibility::Hidden
         };
     }
-    feedback.recoil *= (-18. * time.delta_secs()).exp();
+    feedback.recoil *= (-tuning.recoil_return_speed * time.delta_secs()).exp();
     feedback.flash = (feedback.flash - time.delta_secs()).max(0.);
 }
 
@@ -535,7 +565,13 @@ enum SplashElement {
     Ray(Vec3),
 }
 
-fn spawn_impact(commands: &mut Commands, assets: &WeaponAssets, position: Vec3, normal: Vec3) {
+fn spawn_impact(
+    commands: &mut Commands,
+    assets: &WeaponAssets,
+    position: Vec3,
+    normal: Vec3,
+    tuning: hookrunner_shared::tuning::PresentationTuning,
+) {
     let rotation = Quat::from_rotation_arc(Vec3::Z, normal);
     commands
         .spawn((
@@ -551,13 +587,13 @@ fn spawn_impact(commands: &mut Commands, assets: &WeaponAssets, position: Vec3, 
                 parent.spawn((
                     Mesh3d(assets.spark.clone()),
                     MeshMaterial3d(material.clone()),
-                    Transform::from_scale(Vec3::splat(size)),
+                    Transform::from_scale(Vec3::splat(size * tuning.impact_size)),
                     element,
                     NotShadowCaster,
                 ));
             }
-            for i in 0..8 {
-                let angle = i as f32 * std::f32::consts::TAU / 8.;
+            for i in 0..tuning.impact_rays {
+                let angle = i as f32 * std::f32::consts::TAU / tuning.impact_rays as f32;
                 let direction = rotation * Vec3::new(angle.cos(), angle.sin(), 0.45).normalize();
                 parent.spawn((
                     Mesh3d(assets.beam.clone()),
@@ -571,6 +607,7 @@ fn spawn_impact(commands: &mut Commands, assets: &WeaponAssets, position: Vec3, 
 }
 
 fn fade_impacts(
+    settings: Res<hookrunner_client::tuning::TuningClient>,
     mut commands: Commands,
     time: Res<Time>,
     mut impacts: Query<(Entity, &mut ImpactFlash, &Children)>,
@@ -578,11 +615,11 @@ fn fade_impacts(
 ) {
     for (entity, mut flash, children) in &mut impacts {
         flash.age += time.delta_secs();
-        if flash.age >= 0.3 {
+        if flash.age >= settings.values().presentation.impact_time {
             commands.entity(entity).despawn();
             continue;
         }
-        let progress = flash.age / 0.3;
+        let progress = flash.age / settings.values().presentation.impact_time;
         let fade = 1. - progress;
         for child in children {
             let Ok((element, mut transform)) = elements.get_mut(*child) else {
@@ -599,6 +636,8 @@ fn fade_impacts(
                         .with_scale(Vec3::new(0.055 * fade, 0.055 * fade, 0.28 * fade));
                 }
             }
+            transform.scale *= settings.values().presentation.impact_size;
+            transform.translation *= settings.values().presentation.impact_size;
         }
     }
 }

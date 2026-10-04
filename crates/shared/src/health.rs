@@ -3,13 +3,11 @@ use crate::{PlayerState, movement};
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-pub const MAX_HEALTH: u16 = 100;
-
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Reflect)]
 pub struct Health(pub u16);
 impl Default for Health {
     fn default() -> Self {
-        Self(MAX_HEALTH)
+        Self(crate::tuning::SimulationTuning::default().max_health as u16)
     }
 }
 

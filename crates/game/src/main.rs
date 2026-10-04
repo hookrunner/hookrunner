@@ -1,4 +1,5 @@
 mod baked_material;
+mod debug_menu;
 mod kill_feed;
 mod loading;
 mod map;
@@ -42,6 +43,7 @@ fn main() -> AppExit {
             kill_feed::KillFeedPlugin,
             MaterialPlugin::<baked_material::BakedMaterial>::default(),
             view::ViewPlugin,
+            debug_menu::DebugMenuPlugin,
             nameplates::NameplatesPlugin,
             weapon::WeaponPlugin,
         ))

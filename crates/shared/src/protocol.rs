@@ -24,6 +24,7 @@ pub struct LobbyChannel;
 /// Feet position, planar/vertical velocity and body yaw. Presentation never writes this state.
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Reflect, Default)]
 pub struct PlayerState {
+    pub tuning: crate::tuning::SimulationTuning,
     pub position: Vec3,
     pub velocity: Vec2,
     pub vertical_velocity: f32,
@@ -47,6 +48,7 @@ pub struct PlayerState {
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Reflect)]
 pub struct DeathState {
     pub remaining_ticks: u16,
+    pub total_ticks: u16,
     pub pitch: f32,
 }
 
@@ -60,18 +62,37 @@ pub struct JumpState {
 impl Default for JumpState {
     fn default() -> Self {
         Self {
-            air_jumps_remaining: crate::movement::MAX_AIR_JUMPS,
+            air_jumps_remaining: crate::tuning::SimulationTuning::default().air_jumps as u8,
             last_press: 0,
         }
     }
 }
 
-/// Dash duration, direction and press history are part of rollback state.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Reflect, Default)]
+/// Dash charges, recharge, duration, direction and press history rewind with prediction.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Reflect)]
 pub struct DashState {
     pub remaining_ticks: u16,
     pub direction: Vec3,
     pub last_press: u16,
+    pub charges: u8,
+    pub recharge_ticks: u16,
+}
+
+impl DashState {
+    pub fn new(tuning: crate::tuning::SimulationTuning) -> Self {
+        Self {
+            charges: tuning.dash_charges as u8,
+            remaining_ticks: 0,
+            recharge_ticks: 0,
+            direction: Vec3::ZERO,
+            last_press: 0,
+        }
+    }
+}
+impl Default for DashState {
+    fn default() -> Self {
+        Self::new(crate::tuning::SimulationTuning::default())
+    }
 }
 
 impl Ease for PlayerState {
@@ -85,6 +106,7 @@ impl Ease for PlayerState {
                 .rem_euclid(std::f32::consts::TAU)
                 - std::f32::consts::PI;
             Self {
+                tuning: if t >= 1.0 { end.tuning } else { start.tuning },
                 position: start.position.lerp(end.position, t),
                 velocity: start.velocity.lerp(end.velocity, t),
                 vertical_velocity: start.vertical_velocity
@@ -192,6 +214,11 @@ impl Plugin for ProtocolPlugin {
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<JoinRejected>()
             .add_direction(NetworkDirection::ServerToClient);
+        app.register_message::<crate::tuning::EditRequest>()
+            .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<crate::tuning::EditReply>()
+            .add_direction(NetworkDirection::ServerToClient);
+        app.register_component::<crate::tuning::FeatureSettings>();
         app.register_component::<crate::match_state::MatchState>();
         app.register_component::<PlayerName>();
         app.register_component::<crate::player_color::PlayerColor>();

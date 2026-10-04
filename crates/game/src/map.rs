@@ -74,6 +74,10 @@ pub fn build_map(
                 .chain(lightmaps.iter())
                 .map(|lightmap| {
                     materials.add(BakedMaterial {
+                        base_lighting: Vec2::new(
+                            if material.emissive { 1.0 } else { 4.672 },
+                            if glow.is_some() { 1.0 } else { 0.0 },
+                        ),
                         settings: Vec4::new(
                             if material.emissive { 1.0 } else { 4.672 },
                             if glow.is_some() { 1.0 } else { 0.0 },
@@ -233,4 +237,26 @@ pub fn finish_loading(
         ..default()
     });
     progress.advance(100);
+}
+
+pub fn tune_lighting(
+    settings: Res<hookrunner_client::tuning::TuningClient>,
+    mut previous: Local<Option<hookrunner_shared::tuning::PresentationTuning>>,
+    mut materials: ResMut<Assets<BakedMaterial>>,
+    mut ambient: ResMut<GlobalAmbientLight>,
+) {
+    let tuning = settings.values().presentation;
+    if previous.is_some_and(|p| {
+        p.lightmap_brightness == tuning.lightmap_brightness
+            && p.glow_brightness == tuning.glow_brightness
+            && p.ambient_brightness == tuning.ambient_brightness
+    }) {
+        return;
+    }
+    for (_, material) in materials.iter_mut() {
+        material.settings.x = material.base_lighting.x * tuning.lightmap_brightness;
+        material.settings.y = material.base_lighting.y * tuning.glow_brightness;
+    }
+    ambient.brightness = tuning.ambient_brightness;
+    *previous = Some(tuning);
 }

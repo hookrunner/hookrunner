@@ -2,8 +2,7 @@
 use bevy::{prelude::*, transform::TransformSystems, window::PrimaryWindow};
 use hookrunner_client::Session;
 use hookrunner_shared::{
-    PlayerId, PlayerState, arena, health::MAX_HEALTH, level, player_color::PlayerColor,
-    protocol::PlayerName,
+    PlayerId, PlayerState, level, player_color::PlayerColor, protocol::PlayerName,
 };
 use lightyear::prelude::Predicted;
 use std::collections::HashMap;
@@ -21,14 +20,14 @@ struct Nameplate(Entity);
 #[derive(Component)]
 struct HealthText {
     player: Entity,
-    value: u16,
 }
 
 #[derive(Component)]
 struct HealthBar(Entity);
 
-fn plate_scale(distance: f32) -> f32 {
-    (10.0 / distance.max(f32::EPSILON)).max(0.32)
+fn plate_scale(distance: f32, tuning: hookrunner_shared::tuning::PresentationTuning) -> f32 {
+    (tuning.nameplate_reference_distance / distance.max(f32::EPSILON))
+        .max(tuning.nameplate_min_scale)
 }
 
 fn plate_top(anchor_y: f32, scale: f32) -> f32 {
@@ -39,6 +38,7 @@ fn plate_top(anchor_y: f32, scale: f32) -> f32 {
 fn sync(
     mut commands: Commands,
     session: Res<Session>,
+    settings: Res<hookrunner_client::tuning::TuningClient>,
     time: Res<Time<Real>>,
     mut visibility: Local<HashMap<Entity, bool>>,
     mut elapsed: Local<f32>,
@@ -52,17 +52,20 @@ fn sync(
     mut health_texts: Query<(&mut HealthText, &mut Text)>,
     mut health_bars: Query<(&HealthBar, &mut Node), Without<Nameplate>>,
 ) {
+    let tuning = settings.values().presentation;
     *elapsed += time.delta_secs();
     let check_walls = *elapsed >= 0.1;
     if check_walls {
         *elapsed = 0.0;
     }
     for (entity, name, color, state) in &players {
-        let world = state.position + Vec3::Y * (arena::PLAYER_HEIGHT + 0.35);
+        let world = state.position
+            + Vec3::Y * (state.tuning.player_height + tuning.nameplate_height_offset);
         let line = world - camera.1.translation();
         let distance = line.length();
-        let scale = plate_scale(distance);
-        let visible = session.is_playing() && state.death.is_none() && distance < 45.0;
+        let scale = plate_scale(distance, tuning);
+        let visible =
+            session.is_playing() && state.death.is_none() && distance < tuning.nameplate_distance;
         let unblocked = if visible {
             if check_walls || !visibility.contains_key(&entity) {
                 let clear = level::world()
@@ -96,20 +99,22 @@ fn sync(
                 node.top = px(plate_top(point.y, scale));
                 transform.scale = Vec2::splat(scale);
             }
-            for (mut label, mut text) in &mut health_texts {
+            for (label, mut text) in &mut health_texts {
                 if label.player == entity {
-                    let health = state.health.0.min(MAX_HEALTH);
-                    if label.value != health {
-                        label.value = health;
-                        text.0 = format!("{health} / {MAX_HEALTH}");
+                    let health = state.health.0.min(state.tuning.max_health as u16);
+                    let value = format!("{health} / {}", state.tuning.max_health);
+                    if text.0 != value {
+                        text.0 = value;
                     }
                     break;
                 }
             }
             for (owner, mut bar) in &mut health_bars {
                 if owner.0 == entity {
-                    let width =
-                        percent(100.0 * state.health.0.min(MAX_HEALTH) as f32 / MAX_HEALTH as f32);
+                    let width = percent(
+                        100.0 * state.health.0.min(state.tuning.max_health as u16) as f32
+                            / state.tuning.max_health as f32,
+                    );
                     if bar.width != width {
                         bar.width = width;
                     }
@@ -119,7 +124,7 @@ fn sync(
         } else {
             let [r, g, b] = color.rgb();
             let position = screen.unwrap_or(Vec2::ZERO);
-            let health = state.health.0.min(MAX_HEALTH);
+            let health = state.health.0.min(state.tuning.max_health as u16);
             commands
                 .spawn((
                     Nameplate(entity),
@@ -162,7 +167,9 @@ fn sync(
                             track.spawn((
                                 HealthBar(entity),
                                 Node {
-                                    width: percent(100.0 * health as f32 / MAX_HEALTH as f32),
+                                    width: percent(
+                                        100.0 * health as f32 / state.tuning.max_health as f32,
+                                    ),
                                     height: percent(100.0),
                                     ..default()
                                 },
@@ -170,11 +177,8 @@ fn sync(
                             ));
                         });
                     plate.spawn((
-                        HealthText {
-                            player: entity,
-                            value: health,
-                        },
-                        Text::new(format!("{health} / {MAX_HEALTH}")),
+                        HealthText { player: entity },
+                        Text::new(format!("{health} / {}", state.tuning.max_health)),
                         TextFont {
                             font_size: 12.0,
                             ..default()

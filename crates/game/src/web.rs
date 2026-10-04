@@ -52,6 +52,17 @@ pub fn show_loading() {
 
 pub fn finished_loading() {}
 
+pub fn set_debug_menu(open: bool) {
+    set_attribute(
+        "game",
+        "data-debug-menu",
+        if open { "true" } else { "false" },
+    );
+    if open && let Some(document) = web_sys::window().and_then(|window| window.document()) {
+        document.exit_pointer_lock();
+    }
+}
+
 fn set_attribute(id: &str, name: &str, value: &str) {
     if let Some(element) = web_sys::window()
         .and_then(|w| w.document())

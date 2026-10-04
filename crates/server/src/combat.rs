@@ -26,13 +26,14 @@ pub fn advance_projectiles(
     history: Res<crate::history::PlayerHistory>,
     mut clients: Query<&mut MessageSender<ShotImpact>, With<Connected>>,
     mut round: ResMut<hookrunner_shared::match_state::MatchState>,
+    settings: Res<hookrunner_shared::tuning::FeatureSettings>,
     mut players: Query<(&PlayerId, &mut PlayerState, &ActionState<PlayerInput>)>,
 ) {
     if round.results {
         return;
     }
     for (entity, mut bolt, lag) in &mut projectiles {
-        let delta = bolt.direction * weapon::PROJECTILE_SPEED * TICK_DURATION.as_secs_f32();
+        let delta = bolt.direction * bolt.speed * TICK_DURATION.as_secs_f32();
         let hit = weapon::trace_moving(
             level::world(),
             &bolt,
@@ -40,7 +41,15 @@ pub fn advance_projectiles(
             players.iter().filter_map(|(id, state, _)| {
                 history
                     .sweep(id.0, timeline.tick(), lag.0, state)
-                    .map(|(position, movement)| (id.0, position, movement))
+                    .map(|(position, movement)| {
+                        (
+                            id.0,
+                            position,
+                            movement,
+                            state.tuning.player_radius,
+                            state.tuning.player_height,
+                        )
+                    })
             }),
         );
         if let Some((fraction, impact)) = hit {
@@ -49,12 +58,8 @@ pub fn advance_projectiles(
                 for (id, mut state, input) in &mut players {
                     if id.0 == victim && state.death.is_none() && !state.match_paused {
                         damaged = Some(victim);
-                        if health::apply_damage(
-                            &mut state,
-                            weapon::PROJECTILE_DAMAGE,
-                            input.0.pitch_radians(),
-                        ) {
-                            round.record_death(victim, Some(bolt.owner));
+                        if health::apply_damage(&mut state, bolt.damage, input.0.pitch_radians()) {
+                            round.record_death(victim, Some(bolt.owner), settings.values.rules);
                         }
                         break;
                     }

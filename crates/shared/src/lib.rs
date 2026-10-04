@@ -7,6 +7,7 @@ pub mod movement;
 pub mod nickname;
 pub mod player_color;
 pub mod protocol;
+pub mod tuning;
 pub mod weapon;
 
 pub use protocol::{PlayerId, PlayerInput, PlayerState, ProtocolPlugin};

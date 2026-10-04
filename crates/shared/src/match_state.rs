@@ -3,11 +3,6 @@ use crate::player_color::PlayerColor;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-pub const MATCH_SECONDS: u32 = 300;
-pub const RESULTS_SECONDS: u32 = 10;
-pub const KILL_FEED_SECONDS: u32 = 6;
-pub const KILL_FEED_LIMIT: usize = 5;
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct KillEntry {
     pub killer: Option<String>,
@@ -40,14 +35,19 @@ impl Default for MatchState {
         Self {
             number: 1,
             results: false,
-            remaining_seconds: MATCH_SECONDS,
+            remaining_seconds: crate::tuning::MatchTuning::default().match_duration.ceil() as u32,
             rows: Vec::new(),
             kill_feed: Vec::new(),
         }
     }
 }
 impl MatchState {
-    pub fn record_death(&mut self, victim: u64, killer: Option<u64>) {
+    pub fn record_death(
+        &mut self,
+        victim: u64,
+        killer: Option<u64>,
+        tuning: crate::tuning::MatchTuning,
+    ) {
         if self.results {
             return;
         }
@@ -66,11 +66,9 @@ impl MatchState {
                 killer_color: killer.map(|(_, color)| color),
                 victim: victim_name,
                 victim_color,
-                remaining_seconds: KILL_FEED_SECONDS,
+                remaining_seconds: tuning.kill_feed_time as u32,
             });
-            if self.kill_feed.len() > KILL_FEED_LIMIT {
-                self.kill_feed.remove(0);
-            }
+            self.trim_feed(tuning);
         }
         for row in &mut self.rows {
             if row.id == victim {
@@ -80,6 +78,17 @@ impl MatchState {
                 row.kills += 1;
             }
         }
+    }
+    pub fn trim_feed(&mut self, tuning: crate::tuning::MatchTuning) {
+        for entry in &mut self.kill_feed {
+            entry.remaining_seconds = entry.remaining_seconds.min(tuning.kill_feed_time as u32);
+        }
+        self.kill_feed.retain(|entry| entry.remaining_seconds > 0);
+        let excess = self
+            .kill_feed
+            .len()
+            .saturating_sub(tuning.kill_feed_limit as usize);
+        self.kill_feed.drain(..excess);
     }
     /// Deterministic rank: most kills, fewest deaths, stable player id for ties.
     pub fn ranked(&self) -> Vec<&ScoreRow> {

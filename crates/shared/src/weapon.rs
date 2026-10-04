@@ -8,14 +8,7 @@ use parry3d::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{PlayerInput, PlayerState, arena, level::CollisionWorld};
-
-pub const FIRE_COOLDOWN_TICKS: u16 = (crate::TICK_HZ * 0.2) as u16;
-pub const PROJECTILE_DAMAGE: u16 = 25;
-pub const PROJECTILE_SPEED: f32 = 120.0;
-pub const PROJECTILE_RADIUS: f32 = 0.045;
-pub const PROJECTILE_LENGTH: f32 = 2.4;
-pub const PROJECTILE_LIFETIME_TICKS: u16 = (crate::TICK_HZ * 2.0) as u16;
+use crate::{PlayerInput, PlayerState, level::CollisionWorld};
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Reflect)]
 pub struct WeaponState {
@@ -28,7 +21,7 @@ pub fn step(state: &mut PlayerState, input: &PlayerInput) {
     weapon.cooldown_ticks = weapon.cooldown_ticks.saturating_sub(1);
     if input.fire && weapon.cooldown_ticks == 0 && state.death.is_none() {
         weapon.shot = weapon.shot.wrapping_add(1);
-        weapon.cooldown_ticks = FIRE_COOLDOWN_TICKS;
+        weapon.cooldown_ticks = crate::tuning::seconds_to_ticks(state.tuning.fire_interval);
     }
 }
 
@@ -40,11 +33,15 @@ pub struct Projectile {
     pub position: Vec3,
     pub direction: Vec3,
     pub remaining_ticks: u16,
+    pub lifetime_ticks: u16,
+    pub speed: f32,
+    pub radius: f32,
+    pub damage: u16,
 }
 
 impl Projectile {
     pub fn from_shot(owner: u64, state: &PlayerState, input: &PlayerInput) -> Self {
-        let origin = state.position + Vec3::Y * arena::EYE_HEIGHT;
+        let origin = state.position + Vec3::Y * state.tuning.eye_height;
         Self {
             owner,
             shot: state.weapon.shot,
@@ -52,7 +49,11 @@ impl Projectile {
             position: origin,
             direction: Quat::from_euler(EulerRot::YXZ, state.yaw, input.pitch_radians(), 0.0)
                 * Vec3::NEG_Z,
-            remaining_ticks: PROJECTILE_LIFETIME_TICKS,
+            remaining_ticks: crate::tuning::seconds_to_ticks(state.tuning.projectile_lifetime),
+            lifetime_ticks: crate::tuning::seconds_to_ticks(state.tuning.projectile_lifetime),
+            speed: state.tuning.projectile_speed,
+            radius: state.tuning.projectile_radius,
+            damage: state.tuning.projectile_damage as u16,
         }
     }
 }
@@ -92,7 +93,15 @@ pub fn trace<'a>(
         players
             .into_iter()
             .filter(|(_, p)| p.death.is_none())
-            .map(|(id, p)| (id, p.position, Vec3::ZERO)),
+            .map(|(id, p)| {
+                (
+                    id,
+                    p.position,
+                    Vec3::ZERO,
+                    p.tuning.player_radius,
+                    p.tuning.player_height,
+                )
+            }),
     )
 }
 
@@ -111,20 +120,17 @@ pub fn trace_moving(
     world: &CollisionWorld,
     projectile: &Projectile,
     delta: Vec3,
-    players: impl IntoIterator<Item = (u64, Vec3, Vec3)>,
+    players: impl IntoIterator<Item = (u64, Vec3, Vec3, f32, f32)>,
 ) -> Option<(f32, Impact)> {
     let mut first = world
-        .sweep_sphere(projectile.position, delta, PROJECTILE_RADIUS)
+        .sweep_sphere(projectile.position, delta, projectile.radius)
         .map(|fraction| (fraction, Impact::Wall));
-    let capsule = Capsule::new_y(
-        arena::PLAYER_HEIGHT / 2.0 - arena::PLAYER_RADIUS,
-        arena::PLAYER_RADIUS,
-    );
-    for (id, position, movement) in players {
+    for (id, position, movement, radius, height) in players {
         if id == projectile.owner {
             continue;
         }
-        let center = position + Vec3::Y * (arena::PLAYER_HEIGHT / 2.0);
+        let capsule = Capsule::new_y(height / 2.0 - radius, radius);
+        let center = position + Vec3::Y * (height / 2.0);
         let hit = cast_shapes(
             &Isometry3::translation(center.x, center.y, center.z),
             &Vector3::new(movement.x, movement.y, movement.z),
@@ -135,7 +141,7 @@ pub fn trace_moving(
                 projectile.position.z,
             ),
             &Vector3::new(delta.x, delta.y, delta.z),
-            &Ball::new(PROJECTILE_RADIUS),
+            &Ball::new(projectile.radius),
             ShapeCastOptions {
                 max_time_of_impact: 1.0,
                 stop_at_penetration: true,

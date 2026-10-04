@@ -13,6 +13,7 @@ use bevy::{
 #[derive(Asset, TypePath, AsBindGroup, Clone, Debug)]
 #[bind_group_data(BakedMaterialKey)]
 pub struct BakedMaterial {
+    pub base_lighting: Vec2,
     #[uniform(0)]
     pub settings: Vec4, // irradiance scale, glow scale, alpha cutoff, opaque output
     #[texture(1)]
