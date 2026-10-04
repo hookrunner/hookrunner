@@ -13,7 +13,9 @@ use crate::{PlayerInput, PlayerState, arena, level::CollisionWorld};
 pub const FIRE_COOLDOWN_TICKS: u16 = (crate::TICK_HZ * 0.2) as u16;
 pub const PROJECTILE_DAMAGE: u16 = 25;
 pub const PROJECTILE_SPEED: f32 = 120.0;
-pub const PROJECTILE_RADIUS: f32 = 0.045;
+pub const PROJECTILE_START_RADIUS: f32 = 0.10;
+pub const PROJECTILE_RADIUS: f32 = 0.26;
+pub const PROJECTILE_GROW_DISTANCE: f32 = 12.0;
 pub const PROJECTILE_LENGTH: f32 = 2.4;
 pub const PROJECTILE_LIFETIME_TICKS: u16 = (crate::TICK_HZ * 2.0) as u16;
 
@@ -55,6 +57,11 @@ impl Projectile {
             remaining_ticks: PROJECTILE_LIFETIME_TICKS,
         }
     }
+
+    pub fn radius_at(&self, position: Vec3) -> f32 {
+        let progress = (position.distance(self.origin) / PROJECTILE_GROW_DISTANCE).clamp(0.0, 1.0);
+        PROJECTILE_START_RADIUS + (PROJECTILE_RADIUS - PROJECTILE_START_RADIUS) * progress
+    }
 }
 
 impl Ease for Projectile {
@@ -77,6 +84,15 @@ pub enum Impact {
     Player(u64),
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ProjectileHit {
+    pub owner: u64,
+    pub shot: u16,
+    pub position: Vec3,
+    pub radius: f32,
+    pub normal: Vec3,
+}
+
 /// Sweep the complete segment, choosing the first collision. This prevents a
 /// fast bolt tunnelling through thin walls or hitting a player behind a wall.
 pub fn trace<'a>(
@@ -85,8 +101,9 @@ pub fn trace<'a>(
     delta: Vec3,
     players: impl IntoIterator<Item = (u64, &'a PlayerState)>,
 ) -> Option<(f32, Impact)> {
+    let radius = projectile.radius_at(projectile.position + delta);
     let mut first = world
-        .sweep_sphere(projectile.position, delta, PROJECTILE_RADIUS)
+        .sweep_sphere(projectile.position, delta, radius)
         .map(|fraction| (fraction, Impact::Wall));
     let capsule = Capsule::new_y(
         arena::PLAYER_HEIGHT / 2.0 - arena::PLAYER_RADIUS,
@@ -107,7 +124,7 @@ pub fn trace<'a>(
                 projectile.position.z,
             ),
             &Vector3::new(delta.x, delta.y, delta.z),
-            &Ball::new(PROJECTILE_RADIUS),
+            &Ball::new(radius),
             ShapeCastOptions {
                 max_time_of_impact: 1.0,
                 stop_at_penetration: true,
