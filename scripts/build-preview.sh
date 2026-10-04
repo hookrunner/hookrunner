@@ -7,7 +7,7 @@ if [[ $(uname -m) != aarch64 || $(uname -s) != Linux ]]; then
   exit 1
 fi
 cargo build --locked --release -p hookrunner-server
-./scripts/build-web.sh
+./scripts/build-web.sh --release
 # Avoid including an earlier bundle in a manually repeated build.
 rm -f dist/preview.tar.gz
 package_dir=$(mktemp -d "${TMPDIR:-/tmp}/hookrunner-preview.XXXXXX")

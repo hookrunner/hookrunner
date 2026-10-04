@@ -1,13 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-profile=web
 if (( $# > 0 )); then
   if [[ $# != 1 || $1 != --release ]]; then
     echo "Usage: $0 [--release]" >&2
     exit 2
   fi
-  profile=release
 fi
 bindgen="${WASM_BINDGEN:-wasm-bindgen}"
 expected=$(python3 - <<'PY'
@@ -20,10 +18,10 @@ if ! command -v "$bindgen" >/dev/null || [[ "$($bindgen --version)" != "wasm-bin
   echo "Install the matching WASM tool: cargo install wasm-bindgen-cli --version $expected --locked" >&2
   exit 1
 fi
-cargo build --locked --profile "$profile" --target wasm32-unknown-unknown -p hookrunner-game
+cargo build --locked --release --target wasm32-unknown-unknown -p hookrunner-game
 package_dir=$(mktemp -d "${TMPDIR:-/tmp}/hookrunner-web.XXXXXX")
 trap 'rm -rf -- "$package_dir"' EXIT
-"$bindgen" --target web --out-dir "$package_dir" --out-name hookrunner_web "${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/$profile/hookrunner.wasm"
+"$bindgen" --target web --out-dir "$package_dir" --out-name hookrunner_web "${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/release/hookrunner.wasm"
 python3 - "$package_dir" <<'PY'
 import hashlib
 import json
